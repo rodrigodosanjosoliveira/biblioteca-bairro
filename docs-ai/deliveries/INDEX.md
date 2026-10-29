@@ -15,3 +15,4 @@ Status: draft, em revisão, merged, revertida.
 |---|---|---|---|
 | DEL-001 | Multa por atraso na devolução | draft | 2026-10-29 |
 | DEL-002 | Corrigir nome do módulo no go.mod | draft | 2026-10-29 |
+| DEL-003 | Modelo de empréstimo: Livro, Usuário e Empréstimo | draft | 2026-10-29 |

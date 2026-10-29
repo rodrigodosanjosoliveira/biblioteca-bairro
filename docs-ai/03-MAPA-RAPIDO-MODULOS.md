@@ -33,6 +33,9 @@ a necessidade e mantenha este mapa em dia.
 | Módulo | Arquivos | Responsabilidade | Desde |
 |---|---|---|---|
 | `internal/domain/` | `multa.go` (`CalcularMulta`, `ErrVencimentoZero`, `ErrDevolucaoZero`) | Multa por atraso: R$ 1,00 por dia civil em `America/Sao_Paulo`, teto R$ 20,00, em `decimal.Decimal` (D-09, D-10). Função pura, sem I/O | DEL-001 |
+| `internal/domain/` | `livro.go` (`Livro`, `NovoLivro`, `ErrTituloVazio`) | Exemplar físico com `ID` `int64` e `Titulo` obrigatório (sem espaços nas pontas); `ID` 0 até a persistência (D-12) | DEL-003 |
+| `internal/domain/` | `usuario.go` (`Usuario`, `NovoUsuario`, `ErrNomeVazio`) | Usuário com `ID` `int64` e `Nome` obrigatório, único dado pessoal (não logar) (D-12) | DEL-003 |
+| `internal/domain/` | `emprestimo.go` (`Emprestimo`, `NovoEmprestimo`, `Devolver`, `Aberto`, getters, `PrazoEmprestimoDias`, erros sentinela `ErrLivroIDInvalido`, `ErrUsuarioIDInvalido`, `ErrInicioZero`, `ErrEmprestimoJaDevolvido`, `ErrDevolucaoEmprestimoZero`, `ErrDevolucaoAntesDoInicio`) | Empréstimo com prazo de 14 dias pela data civil em `America/Sao_Paulo`, vencimento às 12:00 SP (D-11); estado encapsulado e status derivado da devolução (D-12). Sem I/O | DEL-003 |
 
 Ainda não existem: `internal/http/`, `internal/storage/`, `internal/config/`,
 `migrations/`.
