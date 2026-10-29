@@ -97,3 +97,41 @@ podem gerar erro de um dia.
 
 **Consequências:** o binário cresce cerca de 450 KB por causa do
 `time/tzdata`. Feriados e fusos configuráveis ficam fora até decisão nova.
+
+## D-11 — Vencimento do empréstimo às 12:00 em `America/Sao_Paulo`
+
+O prazo do empréstimo é de 14 dias corridos (`PrazoEmprestimoDias`, DEL-003),
+contados pela data civil em `America/Sao_Paulo` (D-10). O vencimento é
+representado como 12:00 em `America/Sao_Paulo` da data civil de `inicio` + 14
+dias. Na persistência (DEL-004), o vencimento vai para uma coluna `DATE` e é
+reidratado ao meio-dia em São Paulo.
+
+**Motivo:** a meia-noite pode não existir no início do horário de verão (por
+exemplo, 04/11/2018 em São Paulo); o meio-dia sempre existe e cai na data civil
+correta, o que mantém `CalcularMulta(e.Vencimento(), e.Devolucao())` correto.
+
+**Consequências:** o horário 12:00 é convenção, não regra de negócio; quem ler
+o vencimento deve usar só a data civil. Prazo configurável e feriados ficam
+fora até decisão nova.
+
+## D-12 — Modelo de empréstimo: estado encapsulado, status derivado, IDs `int64`
+
+`Emprestimo` tem campos não exportados com getters; o estado só muda por
+`NovoEmprestimo` e `Devolver`, que validam as regras e não alteram o estado em
+erro. A reconstrução a partir do banco será feita por uma função de
+reidratação validada (`ReidratarEmprestimo`, DEL-004). O status não é gravado:
+`Aberto()` é derivado de `Devolucao` estar zerada. `Livro`, `Usuario` e
+`Emprestimo` usam IDs `int64` (identity no PostgreSQL), sem UUID; o ID fica 0
+até a persistência. `Livro` é o exemplar físico, só com `Titulo`; `Usuario` só
+com `Nome`, para minimizar dado pessoal. A regra de um empréstimo aberto por
+livro (R4) será garantida no banco por índice único parcial
+(`WHERE devolucao IS NULL`) na DEL-004.
+
+**Motivo:** invariantes protegidos pelo tipo, sem estado inconsistente entre
+status e data de devolução, e unicidade sob concorrência garantida por quem
+pode garanti-la, o banco.
+
+**Consequências:** o zero-value `Emprestimo{}` ainda aceita `Devolver` até
+existir `ReidratarEmprestimo`. IDs sequenciais permitem enumeração quando
+expostos via HTTP, o que deve ser tratado na camada HTTP. `Nome` é dado pessoal
+e não deve ir para log. Até a DEL-004, R4 não tem garantia.
