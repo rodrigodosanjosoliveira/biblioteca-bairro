@@ -64,3 +64,36 @@ quando o diff toca `security_surface_paths` ou `go.mod`/`go.sum`
 
 Branch `task/{código}`, commit `{type}({scope}): {resumo} [{código}]`, push
 direto na `main` bloqueado pelo `.githooks/pre-push`.
+
+## D-09 — Valores monetários com `shopspring/decimal` v1.4.0
+
+Valores em dinheiro (começando pela multa por atraso, DEL-001) usam
+`github.com/shopspring/decimal`, fixada em v1.4.0. A recomendação técnica era
+`int64` em centavos, só com a stdlib; o usuário preferiu a biblioteca decimal.
+Licença MIT, sem dependência transitiva (o `go.sum` só tem a própria
+`decimal`), aprovada pelo `supply-chain-review` (`go mod verify` e
+`govulncheck` limpos). A v1.6.0 saiu em 18/10/2026, mas a v1.4.0 foi mantida
+por ser madura; a atualização fica para uma delivery futura.
+
+**Motivo:** aritmética decimal exata, sem erro de arredondamento, com API
+legível para regras monetárias.
+
+**Consequências:** `decimal.Decimal` aparece na API pública de
+`internal/domain`, que passa a depender de pacote externo. A persistência
+futura deve usar coluna `NUMERIC` no PostgreSQL. Em JSON o tipo serializa como
+string por padrão; o futuro endpoint precisa assumir isso no contrato.
+
+## D-10 — Datas de negócio pela data civil em `America/Sao_Paulo`
+
+Regras que contam dias (como a multa por atraso, DEL-001) usam a data civil em
+`America/Sao_Paulo`, qualquer que seja o fuso do `time.Time` recebido. A base
+de fusos é embutida no binário com `import _ "time/tzdata"`, e a diferença em
+dias é calculada entre meias-noites UTC reconstruídas a partir da data civil
+(divisão do Unix por 86400).
+
+**Motivo:** o resultado não pode depender do fuso do servidor nem da base de
+fusos do sistema operacional, e dias de 23h ou 25h no horário de verão não
+podem gerar erro de um dia.
+
+**Consequências:** o binário cresce cerca de 450 KB por causa do
+`time/tzdata`. Feriados e fusos configuráveis ficam fora até decisão nova.
