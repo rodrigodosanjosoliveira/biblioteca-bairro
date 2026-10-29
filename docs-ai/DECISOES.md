@@ -202,3 +202,53 @@ persistência contra PostgreSQL real sem obrigar banco no desenvolvimento local.
 **Consequências:** a proteção do down destrutivo é só procedimental, e ainda
 não há executor de migração de produção definido. Dependência nova exige
 go 1.25+ de quem compila.
+
+## D-14 — Multa do empréstimo derivada por `Emprestimo.Multa(ref)`, sem relógio no domínio
+
+Decisões humanas (H1 a H3) e do `architecture-guardrails` (H4) na DEL-005.
+
+**Multa derivada (H1).** A multa do empréstimo só é calculada, pelo método
+`Emprestimo.Multa`, que delega para `CalcularMulta` (D-09, D-10). Não é
+persistida: sem coluna, sem migração e sem mudança em `internal/storage`.
+
+**Assinatura e semântica (H2).** `func (e Emprestimo) Multa(ref time.Time)
+(decimal.Decimal, error)`. No empréstimo devolvido, a referência é
+`Devolucao()` e `ref` é ignorado, inclusive quando é zero. No aberto, a
+referência é `ref`. As regras da DEL-001 continuam (H3): R$ 1,00 por dia civil
+de atraso em `America/Sao_Paulo`, teto de R$ 20,00 e multa zero com devolução
+até o vencimento.
+
+**Escolhas de implementação (H4).**
+
+- O nome é `Multa`, receptor por valor; o empréstimo não é alterado.
+- `Emprestimo{}` retorna `ErrEmprestimoInvalido`, checado primeiro, coerente
+  com `Devolver` (D-12).
+- `ref` zero no aberto retorna a sentinela nova `ErrReferenciaZero`
+  (`"emprestimo: data de referência zero"`), em vez de reaproveitar
+  `ErrDevolucaoZero`, cuja mensagem seria enganosa.
+- `ref` até o dia civil do vencimento, inclusive antes do início, dá zero sem
+  erro, porque o vencimento é sempre posterior ao início.
+- Erros de `CalcularMulta` voltam sem wrap; em qualquer erro o valor é
+  `decimal.Zero`.
+
+**Sem relógio no domínio.** `internal/domain` não chama `time.Now()` e não tem
+`Clock`: quem chama fornece `ref`. A camada de cima (HTTP ou serviço) é quem vai
+precisar de uma fonte de tempo para o empréstimo aberto.
+
+**Status das deliveries.** Os valores aceitos são os listados no
+`docs-ai/deliveries/INDEX.md`: `draft`, `em revisão`, `merged` e `revertida`
+(o template de report e o validador não definem outra lista; o template só
+traz `draft` como valor inicial). O status vai igual no `INDEX.md` e no front
+matter do report. A delivery fica `em revisão` até o merge do PR; a delivery
+seguinte, depois de conferir o merge na `main`, marca a anterior como `merged`
+nos dois lugares. Na DEL-005 isso corrigiu DEL-001 a DEL-004 (PRs #1 a #4),
+que estavam como `draft` ou `em revisão`.
+
+**Motivo:** multa derivada não diverge de uma multa gravada; domínio sem
+relógio continua determinístico e testável em tabela e fuzz; e o status das
+deliveries deixa de ficar parado depois do merge.
+
+**Consequências:** no empréstimo devolvido, `Multa(agora)` devolve o valor
+congelado na devolução, e quem consome precisa saber disso. Pagamento, abono,
+bloqueio por multa, feriados e valores configuráveis ficam fora até decisão
+nova.

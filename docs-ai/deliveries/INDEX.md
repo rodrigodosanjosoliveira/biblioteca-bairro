@@ -13,7 +13,8 @@ Status: draft, em revisão, merged, revertida.
 
 | ID | Título | Status | Data |
 |---|---|---|---|
-| DEL-001 | Multa por atraso na devolução | draft | 2026-10-29 |
-| DEL-002 | Corrigir nome do módulo no go.mod | draft | 2026-10-29 |
-| DEL-003 | Modelo de empréstimo: Livro, Usuário e Empréstimo | draft | 2026-10-29 |
-| DEL-004 | Persistência do modelo de empréstimo em PostgreSQL: migrações, repositório, pgx e ReidratarEmprestimo | em revisão | 2026-10-29 |
+| DEL-001 | Multa por atraso na devolução | merged | 2026-10-29 |
+| DEL-002 | Corrigir nome do módulo no go.mod | merged | 2026-10-29 |
+| DEL-003 | Modelo de empréstimo: Livro, Usuário e Empréstimo | merged | 2026-10-29 |
+| DEL-004 | Persistência do modelo de empréstimo em PostgreSQL: migrações, repositório, pgx e ReidratarEmprestimo | merged | 2026-10-29 |
+| DEL-005 | Multa por atraso no empréstimo com CalcularMulta | em revisão | 2026-10-29 |

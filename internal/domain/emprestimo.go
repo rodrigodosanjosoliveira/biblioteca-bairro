@@ -3,6 +3,8 @@ package domain
 import (
 	"errors"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // PrazoEmprestimoDias é o prazo do empréstimo, em dias civis de São Paulo.
@@ -31,6 +33,9 @@ var (
 	// ErrEmprestimoInvalido indica operação sobre um empréstimo que não veio de
 	// NovoEmprestimo nem de ReidratarEmprestimo (por exemplo, Emprestimo{}).
 	ErrEmprestimoInvalido = errors.New("emprestimo: inválido")
+	// ErrReferenciaZero indica que a data de referência da multa de um
+	// empréstimo aberto não foi informada.
+	ErrReferenciaZero = errors.New("emprestimo: data de referência zero")
 )
 
 // Emprestimo é o empréstimo de um livro a um usuário. Os campos não são
@@ -162,3 +167,28 @@ func (e Emprestimo) Vencimento() time.Time { return e.vencimento }
 
 // Devolucao devolve a data de devolução; zero enquanto aberto.
 func (e Emprestimo) Devolucao() time.Time { return e.devolucao }
+
+// Multa devolve a multa por atraso do empréstimo, calculada por CalcularMulta
+// sobre o vencimento guardado e uma referência efetiva: Devolucao() se o
+// empréstimo foi devolvido, ou ref se está aberto. Quando o empréstimo foi
+// devolvido, ref é ignorado (inclusive se for zero). ref até o dia civil do
+// vencimento (em America/Sao_Paulo), inclusive antes do início, dá multa zero.
+// Não há relógio no domínio: quem chama passa ref (por exemplo, o instante
+// atual).
+//
+// Valida, nesta ordem: empréstimo válido (início não zero, o que recusa
+// Emprestimo{}) e, se aberto, ref não zero (ErrReferenciaZero). Erros de
+// CalcularMulta voltam sem wrap. Em qualquer erro o valor é decimal.Zero. O
+// empréstimo não é alterado.
+func (e Emprestimo) Multa(ref time.Time) (decimal.Decimal, error) {
+	if e.inicio.IsZero() {
+		return decimal.Zero, ErrEmprestimoInvalido
+	}
+	if !e.Aberto() {
+		return CalcularMulta(e.vencimento, e.devolucao)
+	}
+	if ref.IsZero() {
+		return decimal.Zero, ErrReferenciaZero
+	}
+	return CalcularMulta(e.vencimento, ref)
+}
