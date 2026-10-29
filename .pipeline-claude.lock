@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "toolkit_version": "v1.0.0-rc.2",
+  "files": {
+    ".claude/agents/architecture-guardrails.md": "bae9763398d5b556df1b8fa6075c1df0770c9f97989662b6b801d3518cb4234c",
+    ".claude/agents/code-reviewer.md": "79107d8ce7d0c0527d72037e6311a135e485ec87b3d3b632765672dcd6ec4c6e",
+    ".claude/agents/dev-implementation.md": "8af3b73684721dbb37bf8402ccc52de5f3ba5ceaeb0823c971a9953b04376e59",
+    ".claude/agents/docs-update.md": "1aefcfa66b337c955b2a4cbf53937c48e4df5eb1fb22f934f621a2371b38b465",
+    ".claude/agents/git-delivery.md": "c504776b03bee401c774ee9a62ce0e820e974bace00cf2f301d98b58c0e9267d",
+    ".claude/agents/pm-triage.md": "258ac6299fc4739a0a7284b9023c09d9daaa3ac29d0cb62d97ab57aae7d47412",
+    ".claude/agents/qa-validation.md": "f1af9aa122f8205dd8f95bb10d2c9754a8ae3496fb872b3c0b34a1fded2249e6",
+    ".claude/agents/security-review.md": "5ba56427dc5ac44bcfde27cc98d3ea48b1fdca444593d7f436c71920c5796f39",
+    ".claude/agents/supply-chain-review.md": "998c318dd79be20c983ff45be00a1d26242253348c65d0ce93b90e9ceb8ad70e",
+    ".claude/agents/test-writer.md": "76b4953dde74b9699997774f39d429670320f71b5baf70839a76969caf35beb1",
+    ".claude/skills/fluxo/SKILL.md": "5c0c5902801946d2ca048c7e3eeea4ae17ac9eedb2b5872dcbc309b4e5dbdc6f",
+    ".claude/skills/nova-delivery/SKILL.md": "44aeb49ee414775e23b88499c6226c9a42a69fca257227cdc56eaa9502c2e813",
+    ".claude/skills/validar/SKILL.md": "f462fdf090b9b34525dd92ffad21375238341bf484ac8ef42b48da40e51274b2",
+    ".githooks/pre-push": "c3f8f8eac30883552f7a1cfacd5cddf35acb791aba63979938c2d502e39d57f8"
+  },
+  "released": []
+}
