@@ -13,3 +13,4 @@ Status: draft, em revisão, merged, revertida.
 
 | ID | Título | Status | Data |
 |---|---|---|---|
+| DEL-001 | Multa por atraso na devolução | draft | 2026-10-29 |

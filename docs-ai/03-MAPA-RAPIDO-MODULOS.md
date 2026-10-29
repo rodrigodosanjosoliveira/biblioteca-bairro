@@ -28,6 +28,15 @@
 Os diretórios de `internal/` são o ponto de partida sugerido; crie-os conforme
 a necessidade e mantenha este mapa em dia.
 
+## Módulos existentes
+
+| Módulo | Arquivos | Responsabilidade | Desde |
+|---|---|---|---|
+| `internal/domain/` | `multa.go` (`CalcularMulta`, `ErrVencimentoZero`, `ErrDevolucaoZero`) | Multa por atraso: R$ 1,00 por dia civil em `America/Sao_Paulo`, teto R$ 20,00, em `decimal.Decimal` (D-09, D-10). Função pura, sem I/O | DEL-001 |
+
+Ainda não existem: `internal/http/`, `internal/storage/`, `internal/config/`,
+`migrations/`.
+
 ## Roteamento por caminho
 
 - `internal/http/middleware/` ou `internal/auth/`: `SECURITY: sim`.
