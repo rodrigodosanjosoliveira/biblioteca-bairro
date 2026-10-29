@@ -58,7 +58,7 @@ volta para o `dev-implementation`.
 
 ## Invariantes
 
-1. **Go 1.24+**, como declarado no `go.mod`.
+1. **Go 1.25+**, como declarado no `go.mod`.
 2. **Testes com a stdlib `testing`**, em tabela. Biblioteca de asserção só se o
    projeto optar explicitamente (registre em `docs-ai/DECISOES.md`).
 3. **Dependência externa precisa de justificativa**: a stdlib cobre a maior

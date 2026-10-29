@@ -21,10 +21,20 @@ var (
 	ErrDevolucaoEmprestimoZero = errors.New("emprestimo: data de devolução zero")
 	// ErrDevolucaoAntesDoInicio indica devolução em dia civil (SP) anterior ao início.
 	ErrDevolucaoAntesDoInicio = errors.New("emprestimo: devolução antes do início")
+	// ErrEmprestimoIDInvalido indica id de empréstimo menor ou igual a zero.
+	ErrEmprestimoIDInvalido = errors.New("emprestimo: id inválido")
+	// ErrVencimentoEmprestimoZero indica que a data de vencimento não foi informada.
+	ErrVencimentoEmprestimoZero = errors.New("emprestimo: data de vencimento zero")
+	// ErrVencimentoNaoPosteriorAoInicio indica vencimento em dia civil (SP)
+	// igual ou anterior ao do início.
+	ErrVencimentoNaoPosteriorAoInicio = errors.New("emprestimo: vencimento não posterior ao início")
+	// ErrEmprestimoInvalido indica operação sobre um empréstimo que não veio de
+	// NovoEmprestimo nem de ReidratarEmprestimo (por exemplo, Emprestimo{}).
+	ErrEmprestimoInvalido = errors.New("emprestimo: inválido")
 )
 
 // Emprestimo é o empréstimo de um livro a um usuário. Os campos não são
-// exportados: só NovoEmprestimo (e, futuramente, ReidratarEmprestimo) produz
+// exportados: só NovoEmprestimo e ReidratarEmprestimo produzem
 // valores válidos. O valor zero Emprestimo{} não é um empréstimo válido.
 type Emprestimo struct {
 	id         int64
@@ -61,10 +71,64 @@ func NovoEmprestimo(livroID, usuarioID int64, inicio time.Time) (Emprestimo, err
 	}, nil
 }
 
-// Devolver registra a devolução em em. Valida, nesta ordem: empréstimo
-// aberto, data não zero e dia civil (SP) não anterior ao do início. Em erro,
-// o empréstimo não é alterado. A data é guardada como recebida.
+// ReidratarEmprestimo reconstrói um empréstimo já persistido. Valida, nesta
+// ordem: id > 0, livroID > 0, usuarioID > 0, início não zero, vencimento não
+// zero, data civil (SP) do vencimento posterior à do início e, se a devolução
+// não for zero, data civil (SP) da devolução não anterior à do início. Em
+// erro devolve Emprestimo{}. Não exige vencimento igual a início + 14 dias: o
+// prazo vale na abertura, não na leitura.
+//
+// Normalização do vencimento: a data civil é lida no fuso do próprio valor
+// (vencimento.Date(), sem converter para São Paulo) e o vencimento passa a ser
+// o meio-dia em America/Sao_Paulo dessa data. Assim, tanto a meia-noite UTC
+// entregue pelo pgx para uma coluna DATE quanto o 12:00 SP do domínio
+// resultam no mesmo valor, e reidratar de novo não o altera. Início e
+// devolução são guardados como recebidos.
+func ReidratarEmprestimo(id, livroID, usuarioID int64, inicio, vencimento, devolucao time.Time) (Emprestimo, error) {
+	if id <= 0 {
+		return Emprestimo{}, ErrEmprestimoIDInvalido
+	}
+	if livroID <= 0 {
+		return Emprestimo{}, ErrLivroIDInvalido
+	}
+	if usuarioID <= 0 {
+		return Emprestimo{}, ErrUsuarioIDInvalido
+	}
+	if inicio.IsZero() {
+		return Emprestimo{}, ErrInicioZero
+	}
+	if vencimento.IsZero() {
+		return Emprestimo{}, ErrVencimentoEmprestimoZero
+	}
+
+	a, m, d := vencimento.Date()
+	venc := time.Date(a, m, d, 12, 0, 0, 0, locSaoPaulo)
+
+	if meiaNoiteUTC(venc) <= meiaNoiteUTC(inicio) {
+		return Emprestimo{}, ErrVencimentoNaoPosteriorAoInicio
+	}
+	if !devolucao.IsZero() && meiaNoiteUTC(devolucao) < meiaNoiteUTC(inicio) {
+		return Emprestimo{}, ErrDevolucaoAntesDoInicio
+	}
+
+	return Emprestimo{
+		id:         id,
+		livroID:    livroID,
+		usuarioID:  usuarioID,
+		inicio:     inicio,
+		vencimento: venc,
+		devolucao:  devolucao,
+	}, nil
+}
+
+// Devolver registra a devolução em em. Valida, nesta ordem: empréstimo válido
+// (início não zero, o que recusa Emprestimo{}), empréstimo aberto, data não
+// zero e dia civil (SP) não anterior ao do início. Em erro, o empréstimo não
+// é alterado. A data é guardada como recebida.
 func (e *Emprestimo) Devolver(em time.Time) error {
+	if e.inicio.IsZero() {
+		return ErrEmprestimoInvalido
+	}
 	if !e.Aberto() {
 		return ErrEmprestimoJaDevolvido
 	}

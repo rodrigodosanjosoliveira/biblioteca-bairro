@@ -11,7 +11,7 @@
 
 ## 1. Stack e ferramental
 
-1. **Go 1.24+**, como declarado no `go.mod`.
+1. **Go 1.25+**, como declarado no `go.mod`.
 2. **Testes com a stdlib `testing`:**
    - padrão em tabela;
    - asserções com `t.Errorf` e `t.Fatalf`;
