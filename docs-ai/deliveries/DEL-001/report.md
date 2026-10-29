@@ -42,7 +42,7 @@ aberto e marcadores de pendência em caixa alta.
 ## QA
 - Resultado: aprovado; 7 de 7 itens do escopo cobertos por teste.
 - Cenarios executados: sensores 5/5 ok: `vet`, `test`, `build`, `vuln` ("No vulnerabilities found.") e `mod_verify` ("all modules verified"); fuzz com `-fuzztime=30s`, cerca de 4,1 milhões de execuções ok (executado pelo `dev-implementation`).
-- Riscos residuais: `time/tzdata` aumenta o binário em cerca de 450 KB; `decimal.Decimal` exposto na API pública do domínio; em JSON o tipo serializa como string (impacta o futuro endpoint); a persistência futura deve usar coluna `NUMERIC`; o nome do módulo no `go.mod` é "biblioteca-bairo" (pré-existente, fora do escopo).
+- Riscos residuais: `time/tzdata` aumenta o binário em cerca de 450 KB; `decimal.Decimal` exposto na API pública do domínio; em JSON o tipo serializa como string (impacta o futuro endpoint); a persistência futura deve usar coluna `NUMERIC`; o nome do módulo no `go.mod` é "biblioteca-bairo" (pré-existente, fora do escopo) (corrigido na DEL-002).
 
 ## Docs
 - Docs atualizados: `docs-ai/DECISOES.md` (D-09, valores monetários com `shopspring/decimal` v1.4.0; D-10, data civil em `America/Sao_Paulo` com `time/tzdata`); `docs-ai/03-MAPA-RAPIDO-MODULOS.md` (seção Módulos existentes com `internal/domain/`, `multa.go`, `CalcularMulta`). Os comentários de documentação dos símbolos exportados em `internal/domain/multa.go` já estavam completos. `CLAUDE.md` sem mudança (nenhuma estrutura nem invariante global alterado).

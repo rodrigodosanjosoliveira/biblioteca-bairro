@@ -1,4 +1,4 @@
-module github.com/rodrigodosanjosoliveira/biblioteca-bairo
+module github.com/rodrigodosanjosoliveira/biblioteca-bairro
 
 go 1.24
 
