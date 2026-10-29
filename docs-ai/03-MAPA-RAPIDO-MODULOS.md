@@ -40,19 +40,26 @@ a necessidade e mantenha este mapa em dia.
 | `internal/storage/` | `repositorio.go` (`DBTX`, `Repositorio`, `NovoRepositorio`, `InserirLivro`, `BuscarLivro`, `InserirUsuario`, `BuscarUsuario`, `AbrirEmprestimo`, `RegistrarDevolucao`, `BuscarEmprestimoAbertoPorLivro`, sentinelas `ErrLivroNaoEncontrado`, `ErrUsuarioNaoEncontrado`, `ErrEmprestimoNaoEncontrado`, `ErrLivroJaEmprestado`, `ErrJaPersistido`, `ErrEmprestimoDivergente`) | Repositório `pgx/v5` sobre `DBTX` (conexão ou transação, sem pool). Traduz SQLSTATE em sentinelas sem SQL, DSN nem dado identificador; log e resposta só usam `Code` e `ConstraintName` do `PgError` (D-13). Testes de banco com `BIBLIOTECA_TEST_DATABASE_URL`, schema descartável por teste | DEL-004 |
 | `internal/domain/` | `emprestimo.go` (`Emprestimo.Multa`, `ErrReferenciaZero`) | Multa derivada do empréstimo via `CalcularMulta`, sem persistência: devolvido usa `Devolucao()` e ignora `ref`; aberto usa `ref` (zero → `ErrReferenciaZero`); `Emprestimo{}` → `ErrEmprestimoInvalido`. Sem relógio no domínio: quem chama fornece `ref` (D-14). Sem I/O | DEL-005 |
 | `migrations/` | `0001_esquema_emprestimo.{up,down}.sql`, `migrations.go` (`FS`, `embed`) | Esquema `livro`, `usuario`, `emprestimo`, com FKs `RESTRICT` e índice único parcial `emprestimo_livro_aberto_uq` (R4). SQL puro `NNNN_nome.{up,down}.sql`, sem tabela de versão; regras para próximas migrações em D-13 | DEL-004 |
-
-Ainda não existem: `internal/http/`, `internal/config/`.
+| `internal/config/` | `config.go` (`Carregar(getenv)`, `config.Erro`) | Leitura e validação de `BIBLIOTECA_API_TOKEN` (32 a 512 bytes ASCII visível), `DATABASE_URL`, `ADDR` (padrão `:8080`) e `BIBLIOTECA_DB_MAX_CONNS` (1 a 100, padrão 10, sobrescreve `pool_max_conns`). Só stdlib; mensagens fixas que não ecoam o valor (D-15) | DEL-006 |
+| `internal/http/` (pacote `httpapi`) | `handler.go` (`NovoHandler`, interfaces `Repositorio` e `Pinger`), `erros.go` (mapa de erros), `servidor.go` (`NovoServidor`, `Servir`) | Os 5 endpoints (`POST /livros`, `POST /usuarios`, `POST /livros/{id}/emprestimo`, `POST /livros/{id}/devolucao`, `GET /livros/{id}/emprestimo`), `/healthz` e `/readyz` sem auth; contrato JSON (multa string `StringFixed(2)`, instantes RFC 3339 UTC, vencimento `AAAA-MM-DD`); erro JSON com código fixo; relógio injetado; timeouts 5/10/15/60s e shutdown gracioso (D-15) | DEL-006 |
+| `internal/http/middleware/` | `middleware.go` (RequestID, Log, Recover, LimitarCorpo, Auth, `CabecalhosJSON`, `ResponderErro`) | Cadeia RequestID → Log → Recover → LimitarCorpo(64 KiB) → mux → Auth; token Bearer estático com sha256 e `ConstantTimeCompare`; log `slog` sem `err.Error()`, URL, headers, corpo nem valor de panic; CSP e `Cache-Control: no-store` (D-15) | DEL-006 |
+| `cmd/biblioteca-bairro/` | `main.go` (`run`, `configurarPool`) | Boot: config → `pgxpool` com Ping de 5s e fail fast → Listen → `Servir`; SIGINT/SIGTERM com shutdown de 20s; sem migração no boot (DEL-007) (D-15) | DEL-006 |
 
 ## Roteamento por caminho
 
-- `internal/http/middleware/` ou `internal/auth/`: `SECURITY: sim`.
+- `internal/http/` (inclui `middleware/`) e `internal/config/`: `SECURITY: sim`
+  (autenticação, entrada externa, erros e log, variáveis com segredo; D-15).
+  Ainda não estão em `security_surface_paths` do `.pipeline-claude.json`, então
+  o validador não força a flag: o triage liga `require_security` à mão até o
+  humano acrescentá-los fora da sessão (H10, pendência da DEL-006).
+- `internal/auth/`: `SECURITY: sim`.
 - `migrations/`: `SECURITY: sim` (superfície de segurança), `MIGRATION: sim`
   e `migration-reviewer`, se habilitado. Seguir as regras de migração da D-13;
   down destrutivo exige justificativa no report.
 - `internal/storage/`: `SECURITY: sim` (superfície de segurança); avaliar
   `PERFORMANCE: sim` (índices, N+1) e `query-performance`, se habilitado.
   Mudança de consulta confere o índice que a atende no esquema de
-  `migrations/`.
+  `migrations/`. `*pgxpool.Pool` satisfaz `DBTX` (D-15).
 - `.github/workflows/`: `SECURITY: sim` (serviço Postgres de teste no job
   `gates`, D-13).
 - `go.mod` / `go.sum`: `SUPPLY_CHAIN: sim` e `SECURITY: sim`.

@@ -17,4 +17,5 @@ Status: draft, em revisão, merged, revertida.
 | DEL-002 | Corrigir nome do módulo no go.mod | merged | 2026-10-29 |
 | DEL-003 | Modelo de empréstimo: Livro, Usuário e Empréstimo | merged | 2026-10-29 |
 | DEL-004 | Persistência do modelo de empréstimo em PostgreSQL: migrações, repositório, pgx e ReidratarEmprestimo | merged | 2026-10-29 |
-| DEL-005 | Multa por atraso no empréstimo com CalcularMulta | em revisão | 2026-10-29 |
+| DEL-005 | Multa por atraso no empréstimo com CalcularMulta | merged | 2026-10-29 |
+| DEL-006 | Camada HTTP do empréstimo: internal/http, internal/config e boot com pool PostgreSQL | em revisão | 2026-10-29 |
