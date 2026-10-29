@@ -16,6 +16,21 @@ jobs:
     name: Gates (sensores do projeto)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # PostgreSQL só para os testes de integração de internal/storage. Imagem
+    # fixada por digest (índice multi-arch de postgres:16-alpine). Autenticação
+    # trust: o banco é descartável, local ao job e sem senha no repositório.
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -30,6 +45,11 @@ jobs:
       - name: Instalar o pipeline-claude (versão do Makefile)
         run: make tools
       - name: Sensores
+        # O sensor test roda os testes de banco; OBRIGATORIO=1 reprova em vez
+        # de pular se a URL faltar.
+        env:
+          BIBLIOTECA_TEST_DATABASE_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
+          BIBLIOTECA_TEST_DB_OBRIGATORIO: "1"
         run: bin/pipeline-claude sensors
 
   validate:
