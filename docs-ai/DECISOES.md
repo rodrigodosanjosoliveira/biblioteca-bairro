@@ -142,6 +142,8 @@ no banco pelo índice único parcial `emprestimo_livro_aberto_uq` (D-13).
 
 Decisões aprovadas pelo humano na DEL-004.
 
+> Revisada pela D-15 (pgxpool).
+
 **Driver.** A persistência usa `github.com/jackc/pgx/v5` v5.11.0, no modo
 nativo, com a interface `DBTX` em `internal/storage` (atendida por conexão ou
 transação) e sem `pgxpool`. Justificativa: a stdlib não tem driver PostgreSQL;
@@ -252,3 +254,100 @@ deliveries deixa de ficar parado depois do merge.
 congelado na devolução, e quem consome precisa saber disso. Pagamento, abono,
 bloqueio por multa, feriados e valores configuráveis ficam fora até decisão
 nova.
+
+## D-15 — Camada HTTP com `net/http`, `pgxpool`, token Bearer estático e relógio injetado
+
+Decisões humanas (H1 a H9 e quatro complementares) e do
+`architecture-guardrails` na DEL-006, primeira fatia vertical da camada HTTP.
+
+**Servidor (H1, H8).** `net/http` da stdlib, sem framework. Pacotes
+`internal/config` (só stdlib, `Carregar(getenv)`), `internal/http` (pacote
+`httpapi`) e `internal/http/middleware`; o wiring fica em
+`cmd/biblioteca-bairro` (`run()` e `configurarPool()`). Timeouts do servidor de
+5/10/15/60s, `MaxHeaderBytes` de 64 KiB, corpo limitado a 64 KiB e
+`DisallowUnknownFields`. Cadeia de middlewares: RequestID → Log → Recover →
+LimitarCorpo → mux → Auth (por rota). As interfaces `Repositorio` e `Pinger`
+são definidas no consumidor.
+
+**Endpoints (H2).** `POST /livros`, `POST /usuarios`,
+`POST /livros/{id}/emprestimo`, `POST /livros/{id}/devolucao` e
+`GET /livros/{id}/emprestimo`, mais `/healthz` e `/readyz` sem autenticação. O
+`/readyz` faz um Ping por vez, guarda o sucesso por 1s, tolera 3s durante a
+renovação e responde 503 na hora sem sucesso recente.
+
+**Contrato e erros (H3).** Erro em JSON com `codigo` e mensagem fixa por
+código: `corpo_invalido` 400, `corpo_muito_grande` 413, `id_invalido` 400,
+`nao_autorizado` 401, `titulo_vazio`/`nome_vazio`/`texto_invalido`/
+`usuario_id_invalido`/`usuario_nao_encontrado` 422,
+`livro_nao_encontrado`/`emprestimo_aberto_nao_encontrado` 404,
+`livro_ja_emprestado`/`emprestimo_ja_devolvido`/`emprestimo_alterado` 409,
+`indisponivel` 503 e `erro_interno` 500. 400 para sintaxe, 422 para semântica,
+inclusive usuário inexistente. Saída: multa com `StringFixed(2)`, como string
+(D-09); instantes RFC 3339 em UTC; vencimento `AAAA-MM-DD` (D-11); IDs como
+número. O corpo da devolução precisa ser vazio, e NUL no texto vira 422.
+
+**Relógio injetado (H4).** A camada HTTP fornece a referência de tempo ao
+domínio (D-14); o cliente não envia datas.
+
+**Pool (H5), revisando a D-13.** A D-13 previa "sem `pgxpool`"; o
+`*pgx.Conn` único não é seguro sob requisições concorrentes, então o boot usa
+`pgxpool`, que satisfaz `storage.DBTX` sem mudar `internal/storage`.
+Configuração: `MaxConns` de 1 a 100 (padrão 10), `MinConns` 0,
+`MinIdleConns` 0, lifetime 30min, idle 5min, jitter 0, health check 1min,
+`ConnectTimeout` 5s e timeout de 5s por requisição. Ping falho no boot encerra
+o processo (fail fast). Com isso, `jackc/puddle/v2` v2.2.2 (MIT) e
+`golang.org/x/sync` v0.22.0 (BSD-3), que a D-13 registrava só no `go.sum`,
+entram no build como indiretas, pela cadeia `pgxpool` → `puddle` →
+`x/sync/semaphore`. O `x/sync` v0.22.0 sai do MVS por causa do `x/text`
+v0.41.0; a `puddle` v2.2.3 existe e fica para o próximo bump do pgx. Aprovado
+pelo `supply-chain-review`, com `go mod verify` ok e `govulncheck` limpo.
+
+**Sem migração no boot (H6).** O executor de migração de produção fica para a
+DEL-007.
+
+**Autenticação (H7).** Token Bearer estático: o servidor guarda o sha256 do
+token e compara com `subtle.ConstantTimeCompare`; exige um único header
+`Authorization`; `Auth("")` recusa tudo. Respostas autenticadas e o 401 levam
+`Cache-Control: no-store`.
+
+**Log (H9).** `slog` em JSON no stderr, uma linha por requisição, com
+`codigo`, `causa` e só `pg_code`/`pg_constraint` do `PgError`, nunca
+`err.Error()`, URL, query, headers, corpo, valor nem stack de panic.
+
+**Variáveis de ambiente.**
+
+- `BIBLIOTECA_API_TOKEN`: obrigatório, 32 a 512 bytes de ASCII visível
+  (0x21 a 0x7E), sem trim.
+- `DATABASE_URL`: DSN do PostgreSQL.
+- `ADDR`: endereço de escuta, padrão `:8080`.
+- `BIBLIOTECA_DB_MAX_CONNS`: 1 a 100, padrão 10; sobrescreve `pool_max_conns`
+  da DSN.
+
+Os erros de configuração e de boot têm mensagem fixa (`config.Erro`,
+`erroBoot`) e não ecoam o valor.
+
+**Riscos aceitos.**
+
+- `encoding/json` aceita chave sem diferenciar maiúsculas e chave duplicada (a
+  última vence); nenhuma autorização depende do corpo.
+- RequestID e Log ficam fora do Recover; hoje sem caminho alcançável por
+  entrada externa.
+- A mensagem fixa de `erroBoot` e `config.Erro` é convenção, não garantia do
+  compilador.
+- A refatoração de `r.Pattern` não foi feita, e `Repo` nil não é validado.
+- O 404 revela a existência do livro, e IDs sequenciais são enumeráveis por
+  quem tem o token (operador único).
+- Sem executor, o binário sobe contra banco sem schema: o `/readyz` dá 200 e as
+  rotas dão 500 com `causa=banco`.
+
+**Motivo:** stdlib cobre o servidor HTTP; o pool resolve a concorrência sem
+mudar o repositório; erros com código e mensagem fixa e log sem
+`err.Error()` impedem vazamento de DSN, `PgError` e dado pessoal; relógio
+injetado mantém o domínio determinístico.
+
+**Consequências:** `/healthz` e `/readyz` devem ser expostos só na rede
+interna, e TLS e HSTS ficam a cargo do proxy. Autenticação completa (DEL-008),
+`GET /emprestimos/{id}`, listagens e paginação (DEL-009 em diante) ficam para
+deliveries futuras. Pendente de ação humana fora da sessão (H10): acrescentar
+`internal/http/` e `internal/config/` a `security_surface_paths` no
+`.pipeline-claude.json`.
