@@ -36,7 +36,7 @@
     "query-performance",
     "docs-update"
   ],
-  "enabled_modules": [],
+  "enabled_modules": ["data-model", "migration-reviewer"],
 
   "security_surface_paths": [
     "internal/auth/",
