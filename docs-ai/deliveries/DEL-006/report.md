@@ -1,6 +1,6 @@
 ---
 delivery_id: DEL-006
-status: em revisão
+status: merged
 data: 2026-10-29
 require_security: true
 require_release_ops: false
