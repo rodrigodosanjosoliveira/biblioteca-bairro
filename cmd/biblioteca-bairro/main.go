@@ -58,9 +58,7 @@ func bootDeConfig(err error) erroBoot {
 }
 
 func main() {
-	if err := run(context.Background(), os.Getenv, os.Stderr); err != nil {
-		os.Exit(1)
-	}
+	os.Exit(despachar(context.Background(), os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
 // run carrega a configuração, abre o pool, sobe o servidor e atende até
