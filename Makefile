@@ -3,7 +3,7 @@
 # Versão do pipeline-claude usada por este projeto: instalada em bin/ por
 # `make tools`, fora do go.mod (a ferramenta de governança não entra no grafo de
 # dependências do produto). O doctor confere o binário contra esta versão.
-PIPELINE_CLAUDE_VERSION := v1.0.0-rc.2
+PIPELINE_CLAUDE_VERSION := v1.0.0-rc.4
 
 tools:
 	GOBIN=$(CURDIR)/bin go install github.com/rodrigodosanjosoliveira/pipeline-ai-claude/cmd/pipeline-claude@$(PIPELINE_CLAUDE_VERSION)

@@ -46,7 +46,10 @@
     "go.mod",
     "go.sum",
     ".github/workflows/",
-    ".gitlab-ci.yml"
+    ".gitlab-ci.yml",
+    "Makefile",
+    "internal/http/",
+    "internal/config/"
   ],
   "auto_flags": {
     "require_security": ["go.mod", "go.sum"]
