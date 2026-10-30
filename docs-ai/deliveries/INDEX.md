@@ -19,4 +19,5 @@ Status: draft, em revisão, merged, revertida.
 | DEL-004 | Persistência do modelo de empréstimo em PostgreSQL: migrações, repositório, pgx e ReidratarEmprestimo | merged | 2026-10-29 |
 | DEL-005 | Multa por atraso no empréstimo com CalcularMulta | merged | 2026-10-29 |
 | DEL-006 | Camada HTTP do empréstimo: internal/http, internal/config e boot com pool PostgreSQL | merged | 2026-10-29 |
-| DEL-007 | Atualizar o pipeline-claude de v1.0.0-rc.2 para v1.0.0-rc.4 | em revisão | 2026-10-29 |
+| DEL-007 | Atualizar o pipeline-claude de v1.0.0-rc.2 para v1.0.0-rc.4 | merged | 2026-10-29 |
+| DEL-008 | Executor de migração em produção | em revisão | 2026-10-30 |
