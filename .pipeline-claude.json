@@ -33,7 +33,6 @@
   "editor_agents": [
     "dev-implementation",
     "test-writer",
-    "query-performance",
     "docs-update"
   ],
   "enabled_modules": ["data-model", "migration-reviewer"],
