@@ -323,7 +323,7 @@ func TestEmprestimoMultaNovoEReidratadoEquivalentes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			orig := novoEmprestimoMulta(t, tt.inicio, tt.dev)
 			venc := vencimentoComoDATE(t, orig.Vencimento())
-			reid, err := ReidratarEmprestimo(7, orig.LivroID(), orig.UsuarioID(), orig.Inicio(), venc, orig.Devolucao())
+			reid, err := ReidratarEmprestimo(7, orig.LivroID(), orig.UsuarioID(), orig.Inicio(), venc, orig.Devolucao(), 0)
 			if err != nil {
 				t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 			}
@@ -374,7 +374,7 @@ func TestEmprestimoMultaUsaVencimentoGuardado(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e, err := ReidratarEmprestimo(9, 1, 2, inicio, venc, tt.dev)
+			e, err := ReidratarEmprestimo(9, 1, 2, inicio, venc, tt.dev, 0)
 			if err != nil {
 				t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 			}
@@ -416,7 +416,7 @@ func TestEmprestimoMultaNaoMuta(t *testing.T) {
 	dev := time.Date(2026, 3, 30, 9, 0, 0, 0, time.UTC)
 	ref := time.Date(2026, 4, 1, 9, 0, 0, 0, sp)
 
-	reid, err := ReidratarEmprestimo(5, 1, 2, inicio, dataComoDATE(2026, 3, 24), dev)
+	reid, err := ReidratarEmprestimo(5, 1, 2, inicio, dataComoDATE(2026, 3, 24), dev, 0)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 	}
@@ -503,7 +503,7 @@ func FuzzEmprestimoMulta(f *testing.F) {
 			}
 		}
 
-		reid, err := ReidratarEmprestimo(8, e.LivroID(), e.UsuarioID(), e.Inicio(), vencimentoComoDATE(t, e.Vencimento()), e.Devolucao())
+		reid, err := ReidratarEmprestimo(8, e.LivroID(), e.UsuarioID(), e.Inicio(), vencimentoComoDATE(t, e.Vencimento()), e.Devolucao(), 0)
 		if err != nil {
 			t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 		}

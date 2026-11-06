@@ -10,6 +10,13 @@ import (
 // PrazoEmprestimoDias é o prazo do empréstimo, em dias civis de São Paulo.
 const PrazoEmprestimoDias = 14
 
+// LimiteRenovacoes é o número máximo de renovações de um empréstimo.
+const LimiteRenovacoes = 2
+
+// PrazoRenovacaoDias é quanto cada renovação estende o vencimento, em dias
+// civis de São Paulo, contados a partir do vencimento atual.
+const PrazoRenovacaoDias = 14
+
 var (
 	// ErrLivroIDInvalido indica id de livro menor ou igual a zero.
 	ErrLivroIDInvalido = errors.New("emprestimo: id do livro inválido")
@@ -36,6 +43,15 @@ var (
 	// ErrReferenciaZero indica que a data de referência da multa de um
 	// empréstimo aberto não foi informada.
 	ErrReferenciaZero = errors.New("emprestimo: data de referência zero")
+	// ErrEmprestimoVencido indica tentativa de renovar um empréstimo cujo dia
+	// civil (SP) de vencimento já passou.
+	ErrEmprestimoVencido = errors.New("emprestimo: vencido")
+	// ErrLimiteRenovacoes indica tentativa de renovar um empréstimo que já
+	// atingiu LimiteRenovacoes renovações.
+	ErrLimiteRenovacoes = errors.New("emprestimo: limite de renovações atingido")
+	// ErrRenovacoesInvalidas indica contador de renovações fora de
+	// 0..LimiteRenovacoes na reidratação.
+	ErrRenovacoesInvalidas = errors.New("emprestimo: renovações inválidas")
 )
 
 // Emprestimo é o empréstimo de um livro a um usuário. Os campos não são
@@ -48,6 +64,7 @@ type Emprestimo struct {
 	inicio     time.Time
 	vencimento time.Time
 	devolucao  time.Time
+	renovacoes int
 }
 
 // NovoEmprestimo abre um empréstimo. Valida, nesta ordem, livroID > 0,
@@ -89,7 +106,11 @@ func NovoEmprestimo(livroID, usuarioID int64, inicio time.Time) (Emprestimo, err
 // entregue pelo pgx para uma coluna DATE quanto o 12:00 SP do domínio
 // resultam no mesmo valor, e reidratar de novo não o altera. Início e
 // devolução são guardados como recebidos.
-func ReidratarEmprestimo(id, livroID, usuarioID int64, inicio, vencimento, devolucao time.Time) (Emprestimo, error) {
+//
+// Por último, valida renovacoes em 0..LimiteRenovacoes
+// (ErrRenovacoesInvalidas). Não exige coerência entre vencimento, início e
+// contador.
+func ReidratarEmprestimo(id, livroID, usuarioID int64, inicio, vencimento, devolucao time.Time, renovacoes int) (Emprestimo, error) {
 	if id <= 0 {
 		return Emprestimo{}, ErrEmprestimoIDInvalido
 	}
@@ -115,6 +136,9 @@ func ReidratarEmprestimo(id, livroID, usuarioID int64, inicio, vencimento, devol
 	if !devolucao.IsZero() && meiaNoiteUTC(devolucao) < meiaNoiteUTC(inicio) {
 		return Emprestimo{}, ErrDevolucaoAntesDoInicio
 	}
+	if renovacoes < 0 || renovacoes > LimiteRenovacoes {
+		return Emprestimo{}, ErrRenovacoesInvalidas
+	}
 
 	return Emprestimo{
 		id:         id,
@@ -123,6 +147,7 @@ func ReidratarEmprestimo(id, livroID, usuarioID int64, inicio, vencimento, devol
 		inicio:     inicio,
 		vencimento: venc,
 		devolucao:  devolucao,
+		renovacoes: renovacoes,
 	}, nil
 }
 
@@ -146,6 +171,38 @@ func (e *Emprestimo) Devolver(em time.Time) error {
 	e.devolucao = em
 	return nil
 }
+
+// Renovar estende o vencimento em PrazoRenovacaoDias dias civis a partir do
+// vencimento atual (meio-dia em America/Sao_Paulo) e incrementa o contador.
+// Valida, nesta ordem: empréstimo válido (início não zero, o que recusa
+// Emprestimo{}), empréstimo aberto, ref não zero, não vencido (dia civil SP
+// de ref não posterior ao do vencimento, a mesma fronteira da multa) e
+// contador abaixo de LimiteRenovacoes. Em erro, o empréstimo não é alterado.
+// Não há relógio no domínio: quem chama passa ref.
+func (e *Emprestimo) Renovar(ref time.Time) error {
+	if e.inicio.IsZero() {
+		return ErrEmprestimoInvalido
+	}
+	if !e.Aberto() {
+		return ErrEmprestimoJaDevolvido
+	}
+	if ref.IsZero() {
+		return ErrReferenciaZero
+	}
+	if meiaNoiteUTC(ref) > meiaNoiteUTC(e.vencimento) {
+		return ErrEmprestimoVencido
+	}
+	if e.renovacoes >= LimiteRenovacoes {
+		return ErrLimiteRenovacoes
+	}
+	a, m, d := e.vencimento.In(locSaoPaulo).Date()
+	e.vencimento = time.Date(a, m, d+PrazoRenovacaoDias, 12, 0, 0, 0, locSaoPaulo)
+	e.renovacoes++
+	return nil
+}
+
+// Renovacoes devolve o número de renovações já feitas.
+func (e Emprestimo) Renovacoes() int { return e.renovacoes }
 
 // Aberto informa se o empréstimo ainda não foi devolvido.
 func (e Emprestimo) Aberto() bool { return e.devolucao.IsZero() }

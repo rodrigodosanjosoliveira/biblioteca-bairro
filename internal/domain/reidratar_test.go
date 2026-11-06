@@ -39,6 +39,9 @@ func checarMesmoEmprestimo(t *testing.T, got, want Emprestimo) {
 	if got.Aberto() != want.Aberto() {
 		t.Errorf("Aberto() = %v, want %v", got.Aberto(), want.Aberto())
 	}
+	if got.Renovacoes() != want.Renovacoes() {
+		t.Errorf("Renovacoes() = %d, want %d", got.Renovacoes(), want.Renovacoes())
+	}
 }
 
 func TestErrosReidratacaoMensagens(t *testing.T) {
@@ -115,7 +118,7 @@ func TestReidratarEmprestimoErros(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ReidratarEmprestimo(tt.id, tt.livroID, tt.usuarioID, tt.inicio, tt.vencimento, tt.devol)
+			got, err := ReidratarEmprestimo(tt.id, tt.livroID, tt.usuarioID, tt.inicio, tt.vencimento, tt.devol, 0)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("ReidratarEmprestimo erro = %v, want %v", err, tt.wantErr)
 			}
@@ -124,7 +127,7 @@ func TestReidratarEmprestimoErros(t *testing.T) {
 	}
 
 	// Sanidade do caso base: com os mesmos valores válidos não há erro.
-	if _, err := ReidratarEmprestimo(1, 1, 1, inicio, venc, dev); err != nil {
+	if _, err := ReidratarEmprestimo(1, 1, 1, inicio, venc, dev, 0); err != nil {
 		t.Fatalf("caso base válido erro inesperado: %v", err)
 	}
 }
@@ -168,7 +171,7 @@ func TestReidratarEmprestimoSucesso(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e, err := ReidratarEmprestimo(17, 42, 7, tt.inicio, tt.vencimento, tt.devolucao)
+			e, err := ReidratarEmprestimo(17, 42, 7, tt.inicio, tt.vencimento, tt.devolucao, 0)
 			if err != nil {
 				t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 			}
@@ -204,11 +207,11 @@ func TestReidratarEmprestimoNormalizacaoIdempotente(t *testing.T) {
 		time.Date(2018, 11, 4, 23, 59, 0, 0, time.UTC),
 	} {
 		t.Run(venc.String(), func(t *testing.T) {
-			e1, err := ReidratarEmprestimo(1, 1, 1, inicio, venc, time.Time{})
+			e1, err := ReidratarEmprestimo(1, 1, 1, inicio, venc, time.Time{}, 0)
 			if err != nil {
 				t.Fatalf("primeira ReidratarEmprestimo erro inesperado: %v", err)
 			}
-			e2, err := ReidratarEmprestimo(1, 1, 1, inicio, e1.Vencimento(), time.Time{})
+			e2, err := ReidratarEmprestimo(1, 1, 1, inicio, e1.Vencimento(), time.Time{}, 0)
 			if err != nil {
 				t.Fatalf("segunda ReidratarEmprestimo erro inesperado: %v", err)
 			}
@@ -260,7 +263,7 @@ func TestReidratarEmprestimoIdaEVolta(t *testing.T) {
 			}
 			for _, f := range formatos {
 				t.Run(f.name, func(t *testing.T) {
-					got, err := ReidratarEmprestimo(99, orig.LivroID(), orig.UsuarioID(), orig.Inicio(), f.venc, orig.Devolucao())
+					got, err := ReidratarEmprestimo(99, orig.LivroID(), orig.UsuarioID(), orig.Inicio(), f.venc, orig.Devolucao(), 0)
 					if err != nil {
 						t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 					}
@@ -280,7 +283,7 @@ func TestReidratarEmprestimoDevolver(t *testing.T) {
 	sp := saoPaulo(t)
 	inicio := time.Date(2026, 3, 10, 10, 0, 0, 0, sp)
 
-	aberto, err := ReidratarEmprestimo(5, 1, 1, inicio, dataComoDATE(2026, 3, 24), time.Time{})
+	aberto, err := ReidratarEmprestimo(5, 1, 1, inicio, dataComoDATE(2026, 3, 24), time.Time{}, 0)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 	}
@@ -292,7 +295,7 @@ func TestReidratarEmprestimoDevolver(t *testing.T) {
 		t.Errorf("depois de Devolver: Aberto=%v Devolucao=%v ID=%d, want false/%v/5", aberto.Aberto(), aberto.Devolucao(), aberto.ID(), em)
 	}
 
-	fechado, err := ReidratarEmprestimo(6, 1, 1, inicio, dataComoDATE(2026, 3, 24), em)
+	fechado, err := ReidratarEmprestimo(6, 1, 1, inicio, dataComoDATE(2026, 3, 24), em, 0)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo erro inesperado: %v", err)
 	}
@@ -338,6 +341,7 @@ func FuzzReidratarEmprestimo(f *testing.F) {
 		inicio    time.Time
 		devSeg    int64
 		devolvido bool
+		renov     uint8
 	}{
 		{inicio: time.Date(2026, 3, 10, 10, 0, 0, 0, sp)},
 		{inicio: time.Date(2026, 3, 10, 23, 30, 0, 0, sp), devSeg: 60, devolvido: true},
@@ -346,20 +350,34 @@ func FuzzReidratarEmprestimo(f *testing.F) {
 		{inicio: time.Date(2019, 2, 3, 9, 0, 0, 0, sp), devSeg: 30 * 86400, devolvido: true},
 		{inicio: time.Date(2019, 2, 16, 23, 30, 0, 0, sp), devSeg: 1800, devolvido: true},
 		{inicio: time.Date(2024, 2, 20, 9, 0, 0, 0, sp)},
+		{inicio: time.Date(2026, 3, 10, 10, 0, 0, 0, sp), renov: 1},
+		{inicio: time.Date(2018, 10, 7, 9, 0, 0, 0, sp), renov: 2},
+		{inicio: time.Date(2019, 2, 3, 9, 0, 0, 0, sp), devSeg: 40 * 86400, devolvido: true, renov: 2},
 	} {
-		f.Add(s.inicio.Unix(), s.devSeg, s.devolvido)
+		f.Add(s.inicio.Unix(), s.devSeg, s.devolvido, s.renov)
 	}
-	f.Add(fuzzMin, int64(0), false)
-	f.Add(fuzzMax-1, int64(86400), true)
+	f.Add(fuzzMin, int64(0), false, uint8(0))
+	f.Add(fuzzMax-1, int64(86400), true, uint8(2))
 
 	const maxDevSeg = 400 * 86400
 
-	f.Fuzz(func(t *testing.T, u, devSeg int64, devolvido bool) {
+	f.Fuzz(func(t *testing.T, u, devSeg int64, devolvido bool, renov uint8) {
 		inicio := time.Unix(limitarUnix(u), 0).UTC()
 
 		orig, err := NovoEmprestimo(3, 4, inicio)
 		if err != nil {
 			t.Fatalf("NovoEmprestimo(3, 4, %v) erro inesperado: %v", inicio, err)
+		}
+		// Renovações no próprio início: nunca vencido, então só o limite
+		// recusa. n fica em 0..LimiteRenovacoes.
+		n := int(renov) % (LimiteRenovacoes + 1)
+		for i := 0; i < n; i++ {
+			if err := orig.Renovar(inicio); err != nil {
+				t.Fatalf("inicio %v: Renovar #%d erro inesperado: %v", inicio, i+1, err)
+			}
+		}
+		if orig.Renovacoes() != n {
+			t.Fatalf("inicio %v: Renovacoes() = %d, want %d", inicio, orig.Renovacoes(), n)
 		}
 		if devolvido {
 			off := devSeg % maxDevSeg
@@ -372,9 +390,9 @@ func FuzzReidratarEmprestimo(f *testing.F) {
 		}
 
 		for _, venc := range []time.Time{orig.Vencimento(), vencimentoComoDATE(t, orig.Vencimento())} {
-			got, err := ReidratarEmprestimo(8, orig.LivroID(), orig.UsuarioID(), orig.Inicio(), venc, orig.Devolucao())
+			got, err := ReidratarEmprestimo(8, orig.LivroID(), orig.UsuarioID(), orig.Inicio(), venc, orig.Devolucao(), orig.Renovacoes())
 			if err != nil {
-				t.Fatalf("inicio %v venc %v dev %v: ReidratarEmprestimo erro inesperado: %v", inicio, venc, orig.Devolucao(), err)
+				t.Fatalf("inicio %v venc %v dev %v renov %d: ReidratarEmprestimo erro inesperado: %v", inicio, venc, orig.Devolucao(), orig.Renovacoes(), err)
 			}
 			if !got.Vencimento().Equal(orig.Vencimento()) {
 				t.Errorf("inicio %v venc %v: Vencimento() = %v, want %v", inicio, venc, got.Vencimento(), orig.Vencimento())
@@ -383,13 +401,19 @@ func FuzzReidratarEmprestimo(f *testing.F) {
 				t.Errorf("inicio %v: ida e volta divergiu: got (%v, %v, %v), want (%v, %v, %v)",
 					inicio, got.Inicio(), got.Devolucao(), got.Aberto(), orig.Inicio(), orig.Devolucao(), orig.Aberto())
 			}
+			if got.Renovacoes() != orig.Renovacoes() {
+				t.Errorf("inicio %v: Renovacoes() = %d, want %d", inicio, got.Renovacoes(), orig.Renovacoes())
+			}
 
-			again, err := ReidratarEmprestimo(8, got.LivroID(), got.UsuarioID(), got.Inicio(), got.Vencimento(), got.Devolucao())
+			again, err := ReidratarEmprestimo(8, got.LivroID(), got.UsuarioID(), got.Inicio(), got.Vencimento(), got.Devolucao(), got.Renovacoes())
 			if err != nil {
 				t.Fatalf("segunda ReidratarEmprestimo erro inesperado: %v", err)
 			}
 			if !again.Vencimento().Equal(got.Vencimento()) {
 				t.Errorf("normalização não idempotente: %v -> %v", got.Vencimento(), again.Vencimento())
+			}
+			if again.Renovacoes() != got.Renovacoes() {
+				t.Errorf("Renovacoes() na segunda reidratação = %d, want %d", again.Renovacoes(), got.Renovacoes())
 			}
 		}
 	})

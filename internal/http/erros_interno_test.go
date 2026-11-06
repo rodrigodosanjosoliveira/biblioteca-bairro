@@ -3,11 +3,13 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/domain"
 	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/http/middleware"
 )
 
@@ -56,6 +58,48 @@ func TestFalharCodigoForaDoCatalogo(t *testing.T) {
 			}
 			if linha["codigo"] != tt.wantCod || linha["level"] != tt.wantNivel {
 				t.Errorf("log codigo = %v nível = %v, want %q %q", linha["codigo"], linha["level"], tt.wantCod, tt.wantNivel)
+			}
+		})
+	}
+}
+
+// Códigos da renovação: 409 com mensagem fixa, e o mapeamento das sentinelas
+// do domínio. ErrRenovacoesInvalidas é dado gravado inválido: 500 bug_interno.
+func TestCatalogoRenovacao(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantCod   string
+		wantStat  int
+		wantMsg   string
+		wantCausa string
+	}{
+		{name: "vencido", err: domain.ErrEmprestimoVencido, wantCod: "emprestimo_vencido", wantStat: 409, wantMsg: "empréstimo vencido"},
+		{name: "vencido embrulhado", err: fmt.Errorf("x: %w", domain.ErrEmprestimoVencido), wantCod: "emprestimo_vencido", wantStat: 409, wantMsg: "empréstimo vencido"},
+		{name: "limite", err: domain.ErrLimiteRenovacoes, wantCod: "limite_renovacoes_atingido", wantStat: 409, wantMsg: "limite de renovações atingido"},
+		{name: "renovacoes invalidas", err: fmt.Errorf("storage: empréstimo gravado inválido: %w", domain.ErrRenovacoesInvalidas), wantCod: codErroInterno, wantStat: 500, wantMsg: "erro interno", wantCausa: causaBugInterno},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cod, attrs := classificar(tt.err)
+			if cod != tt.wantCod {
+				t.Fatalf("classificar = %q, want %q", cod, tt.wantCod)
+			}
+			e, ok := catalogo[cod]
+			if !ok {
+				t.Fatalf("código %q fora do catálogo", cod)
+			}
+			if e.status != tt.wantStat || e.mensagem != tt.wantMsg {
+				t.Errorf("catálogo[%q] = %d %q, want %d %q", cod, e.status, e.mensagem, tt.wantStat, tt.wantMsg)
+			}
+			causa := ""
+			for _, a := range attrs {
+				if a.Key == "causa" {
+					causa = a.Value.String()
+				}
+			}
+			if causa != tt.wantCausa {
+				t.Errorf("causa = %q, want %q", causa, tt.wantCausa)
 			}
 		})
 	}

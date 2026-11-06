@@ -28,6 +28,8 @@ const (
 	codLivroJaEmprestado    = "livro_ja_emprestado"
 	codJaDevolvido          = "emprestimo_ja_devolvido"
 	codEmprestimoAlterado   = "emprestimo_alterado"
+	codEmprestimoVencido    = "emprestimo_vencido"
+	codLimiteRenovacoes     = "limite_renovacoes_atingido"
 	codIndisponivel         = "indisponivel"
 	codErroInterno          = "erro_interno"
 )
@@ -62,6 +64,8 @@ var catalogo = map[string]erroAPI{
 	codLivroJaEmprestado:    {http.StatusConflict, "livro já emprestado"},
 	codJaDevolvido:          {http.StatusConflict, "empréstimo já devolvido"},
 	codEmprestimoAlterado:   {http.StatusConflict, "empréstimo alterado por outra operação"},
+	codEmprestimoVencido:    {http.StatusConflict, "empréstimo vencido"},
+	codLimiteRenovacoes:     {http.StatusConflict, "limite de renovações atingido"},
 	codIndisponivel:         {http.StatusServiceUnavailable, "serviço indisponível"},
 	codErroInterno:          {http.StatusInternalServerError, "erro interno"},
 }
@@ -106,6 +110,10 @@ func classificar(err error) (string, []slog.Attr) {
 		return codJaDevolvido, nil
 	case errors.Is(err, storage.ErrEmprestimoDivergente):
 		return codEmprestimoAlterado, nil
+	case errors.Is(err, domain.ErrEmprestimoVencido):
+		return codEmprestimoVencido, nil
+	case errors.Is(err, domain.ErrLimiteRenovacoes):
+		return codLimiteRenovacoes, nil
 	}
 	return codErroInterno, causaInterna(err)
 }
@@ -124,6 +132,7 @@ var errosDeBug = []error{
 	domain.ErrVencimentoNaoPosteriorAoInicio,
 	domain.ErrVencimentoZero,
 	domain.ErrDevolucaoZero,
+	domain.ErrRenovacoesInvalidas,
 }
 
 // causaInterna monta os atributos de log de um 500.

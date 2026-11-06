@@ -246,9 +246,31 @@ func reidratado(t *testing.T, id int64, devolvido bool) domain.Emprestimo {
 	if devolvido {
 		dev = time.Date(2026, 3, 20, 10, 0, 0, 0, sp)
 	}
-	e, err := domain.ReidratarEmprestimo(id, 1, 1, time.Date(2026, 3, 10, 10, 0, 0, 0, sp), time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), dev)
+	e, err := domain.ReidratarEmprestimo(id, 1, 1, time.Date(2026, 3, 10, 10, 0, 0, 0, sp), time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), dev, 0)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo: %v", err)
+	}
+	return e
+}
+
+// reidratadoRenovacoes reidrata o empréstimo aberto de reidratado com o
+// contador dado (sem passar por Renovar).
+func reidratadoRenovacoes(t *testing.T, id int64, renovacoes int) domain.Emprestimo {
+	t.Helper()
+	e, err := domain.ReidratarEmprestimo(id, 1, 1, time.Date(2026, 3, 10, 10, 0, 0, 0, saoPaulo(t)), time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC), time.Time{}, renovacoes)
+	if err != nil {
+		t.Fatalf("ReidratarEmprestimo: %v", err)
+	}
+	return e
+}
+
+// renovadoSemID devolve um NovoEmprestimo renovado uma vez: válido e com
+// contador 1, mas sem ID.
+func renovadoSemID(t *testing.T) domain.Emprestimo {
+	t.Helper()
+	e := emprestimoValido(t)
+	if err := e.Renovar(time.Date(2026, 3, 12, 10, 0, 0, 0, saoPaulo(t))); err != nil {
+		t.Fatalf("Renovar: %v", err)
 	}
 	return e
 }
@@ -306,6 +328,26 @@ func TestRepositorioRecusaAntesDoSQL(t *testing.T) {
 			_, err := r.RegistrarDevolucao(ctx, reidratado(t, 5, false))
 			return err
 		}, wantErr: domain.ErrEmprestimoInvalido},
+		{name: "RegistrarRenovacao zero-value", chamar: func(r *Repositorio) error {
+			_, err := r.RegistrarRenovacao(ctx, domain.Emprestimo{})
+			return err
+		}, wantErr: domain.ErrEmprestimoInvalido},
+		{name: "RegistrarRenovacao sem ID", chamar: func(r *Repositorio) error {
+			_, err := r.RegistrarRenovacao(ctx, renovadoSemID(t))
+			return err
+		}, wantErr: domain.ErrEmprestimoInvalido},
+		{name: "RegistrarRenovacao devolvido", chamar: func(r *Repositorio) error {
+			e, err := domain.ReidratarEmprestimo(5, 1, 1, time.Date(2026, 3, 10, 10, 0, 0, 0, saoPaulo(t)), time.Date(2026, 4, 7, 0, 0, 0, 0, time.UTC), time.Date(2026, 3, 20, 10, 0, 0, 0, saoPaulo(t)), 1)
+			if err != nil {
+				t.Fatalf("ReidratarEmprestimo: %v", err)
+			}
+			_, err = r.RegistrarRenovacao(ctx, e)
+			return err
+		}, wantErr: domain.ErrEmprestimoInvalido},
+		{name: "RegistrarRenovacao sem renovacao (contador 0)", chamar: func(r *Repositorio) error {
+			_, err := r.RegistrarRenovacao(ctx, reidratadoRenovacoes(t, 5, 0))
+			return err
+		}, wantErr: domain.ErrEmprestimoInvalido},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -331,9 +373,17 @@ func TestRepositorioErroSemDados(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NovoEmprestimo: %v", err)
 	}
-	devolver, err := domain.ReidratarEmprestimo(55555, 424242, 515151, time.Date(2026, 3, 10, 10, 0, 0, 0, saoPaulo(t)), time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), time.Date(2026, 3, 20, 10, 0, 0, 0, saoPaulo(t)))
+	devolver, err := domain.ReidratarEmprestimo(55555, 424242, 515151, time.Date(2026, 3, 10, 10, 0, 0, 0, saoPaulo(t)), time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), time.Date(2026, 3, 20, 10, 0, 0, 0, saoPaulo(t)), 0)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo: %v", err)
+	}
+
+	renovar, err := domain.ReidratarEmprestimo(55555, 424242, 515151, time.Date(2026, 3, 10, 10, 0, 0, 0, saoPaulo(t)), time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), time.Time{}, 0)
+	if err != nil {
+		t.Fatalf("ReidratarEmprestimo: %v", err)
+	}
+	if err := renovar.Renovar(time.Date(2026, 3, 12, 10, 0, 0, 0, saoPaulo(t))); err != nil {
+		t.Fatalf("Renovar: %v", err)
 	}
 
 	tests := []struct {
@@ -369,6 +419,10 @@ func TestRepositorioErroSemDados(t *testing.T) {
 		}, proibidos: []string{"424242", "515151", "Key ("}},
 		{name: "RegistrarDevolucao", dbErr: falha, wantIs: falha, chamar: func(r *Repositorio) error {
 			_, err := r.RegistrarDevolucao(ctx, devolver)
+			return err
+		}, proibidos: []string{"55555", "424242", "515151"}},
+		{name: "RegistrarRenovacao", dbErr: falha, wantIs: falha, chamar: func(r *Repositorio) error {
+			_, err := r.RegistrarRenovacao(ctx, renovar)
 			return err
 		}, proibidos: []string{"55555", "424242", "515151"}},
 		{name: "BuscarEmprestimoAbertoPorLivro", dbErr: falha, wantIs: falha, chamar: func(r *Repositorio) error {

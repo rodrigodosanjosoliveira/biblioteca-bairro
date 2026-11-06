@@ -41,6 +41,9 @@ func checarEmprestimoZero(t *testing.T, e Emprestimo) {
 	if e.Aberto() != zero.Aberto() {
 		t.Errorf("em erro Aberto() = %v, want %v (de Emprestimo{})", e.Aberto(), zero.Aberto())
 	}
+	if e.Renovacoes() != 0 {
+		t.Errorf("em erro Renovacoes() = %d, want 0", e.Renovacoes())
+	}
 }
 
 func TestPrazoEmprestimoDias(t *testing.T) {

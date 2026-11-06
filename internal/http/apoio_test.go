@@ -59,6 +59,7 @@ type repoFake struct {
 	errAbrir          error
 	errBuscar         error
 	errRegistrar      error
+	errRenovar        error
 
 	// bloquear faz toda chamada esperar o ctx e devolver o erro dele embrulhado.
 	bloquear bool
@@ -67,12 +68,14 @@ type repoFake struct {
 
 	buscarRet    domain.Emprestimo
 	registrarRet *domain.Emprestimo
+	renovarRet   *domain.Emprestimo
 
 	livroRecebido     domain.Livro
 	usuarioRecebido   domain.Usuario
 	abrirRecebido     domain.Emprestimo
 	buscarRecebido    int64
 	registrarRecebido domain.Emprestimo
+	renovarRecebido   domain.Emprestimo
 }
 
 func (r *repoFake) registrar(ctx context.Context, nome string) error {
@@ -147,7 +150,7 @@ func (r *repoFake) AbrirEmprestimo(ctx context.Context, e domain.Emprestimo) (do
 	if r.errAbrir != nil {
 		return domain.Emprestimo{}, r.errAbrir
 	}
-	got, err := domain.ReidratarEmprestimo(77, e.LivroID(), e.UsuarioID(), e.Inicio(), dataUTC(e.Vencimento()), time.Time{})
+	got, err := domain.ReidratarEmprestimo(77, e.LivroID(), e.UsuarioID(), e.Inicio(), dataUTC(e.Vencimento()), time.Time{}, 0)
 	if err != nil {
 		return domain.Emprestimo{}, fmt.Errorf("fake: %w", err)
 	}
@@ -175,6 +178,20 @@ func (r *repoFake) RegistrarDevolucao(ctx context.Context, e domain.Emprestimo) 
 	}
 	if r.registrarRet != nil {
 		return *r.registrarRet, nil
+	}
+	return e, nil
+}
+
+func (r *repoFake) RegistrarRenovacao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error) {
+	if err := r.registrar(ctx, "RegistrarRenovacao"); err != nil {
+		return domain.Emprestimo{}, err
+	}
+	r.renovarRecebido = e
+	if r.errRenovar != nil {
+		return domain.Emprestimo{}, r.errRenovar
+	}
+	if r.renovarRet != nil {
+		return *r.renovarRet, nil
 	}
 	return e, nil
 }
@@ -224,7 +241,18 @@ func emprestimo(t testing.TB, id, livroID, usuarioID int64, inicio, devolucao ti
 	if err != nil {
 		t.Fatalf("NovoEmprestimo: %v", err)
 	}
-	e, err := domain.ReidratarEmprestimo(id, livroID, usuarioID, inicio, dataUTC(novo.Vencimento()), devolucao)
+	e, err := domain.ReidratarEmprestimo(id, livroID, usuarioID, inicio, dataUTC(novo.Vencimento()), devolucao, 0)
+	if err != nil {
+		t.Fatalf("ReidratarEmprestimo: %v", err)
+	}
+	return e
+}
+
+// emprestimoRenovado reidrata, como o storage faria, um empréstimo aberto com
+// vencimento e contador de renovações dados.
+func emprestimoRenovado(t testing.TB, id, livroID, usuarioID int64, inicio, vencimento time.Time, renovacoes int) domain.Emprestimo {
+	t.Helper()
+	e, err := domain.ReidratarEmprestimo(id, livroID, usuarioID, inicio, dataUTC(vencimento), time.Time{}, renovacoes)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo: %v", err)
 	}
@@ -313,6 +341,7 @@ func rotasProtegidas() []rota {
 		{nome: "POST emprestimo", method: http.MethodPost, path: "/livros/1/emprestimo", body: `{"usuario_id":2}`},
 		{nome: "POST devolucao", method: http.MethodPost, path: "/livros/1/devolucao"},
 		{nome: "GET emprestimo", method: http.MethodGet, path: "/livros/1/emprestimo"},
+		{nome: "POST renovacao", method: http.MethodPost, path: "/livros/1/renovacao"},
 	}
 }
 
