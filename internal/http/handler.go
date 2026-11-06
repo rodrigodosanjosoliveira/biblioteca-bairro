@@ -41,6 +41,7 @@ type Repositorio interface {
 	AbrirEmprestimo(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error)
 	BuscarEmprestimoAbertoPorLivro(ctx context.Context, livroID int64) (domain.Emprestimo, error)
 	RegistrarDevolucao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error)
+	RegistrarRenovacao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error)
 }
 
 // Pinger verifica a disponibilidade do banco. *pgxpool.Pool o satisfaz.
@@ -129,6 +130,7 @@ func NovoHandler(d Dependencias) http.Handler {
 	mux.Handle("POST /usuarios", auth(http.HandlerFunc(a.criarUsuario)))
 	mux.Handle("POST /livros/{id}/emprestimo", auth(http.HandlerFunc(a.abrirEmprestimo)))
 	mux.Handle("POST /livros/{id}/devolucao", auth(http.HandlerFunc(a.devolver)))
+	mux.Handle("POST /livros/{id}/renovacao", auth(http.HandlerFunc(a.renovar)))
 	mux.Handle("GET /livros/{id}/emprestimo", auth(http.HandlerFunc(a.consultarEmprestimo)))
 
 	return middleware.RequestID(
@@ -220,6 +222,7 @@ type saidaEmprestimo struct {
 	Vencimento string  `json:"vencimento"`
 	Devolucao  *string `json:"devolucao"`
 	Multa      string  `json:"multa"`
+	Renovacoes int     `json:"renovacoes"`
 }
 
 func (a *api) criarLivro(w http.ResponseWriter, r *http.Request) {
@@ -346,6 +349,36 @@ func (a *api) devolver(w http.ResponseWriter, r *http.Request) {
 	responderEmprestimo(w, r, http.StatusOK, got, agora)
 }
 
+func (a *api) renovar(w http.ResponseWriter, r *http.Request) {
+	livroID, ok := parseID(r.PathValue("id"))
+	if !ok {
+		falhar(w, r, codIDInvalido)
+		return
+	}
+	if cod := exigirCorpoVazio(r.Body); cod != "" {
+		falhar(w, r, cod)
+		return
+	}
+	agora := a.agora()
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	e, err := a.repo.BuscarEmprestimoAbertoPorLivro(ctx, livroID)
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	if err := e.Renovar(agora); err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	got, err := a.repo.RegistrarRenovacao(ctx, e)
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	responderEmprestimo(w, r, http.StatusOK, got, agora)
+}
+
 // responderEmprestimo calcula a multa com ref = agora (ignorada se o
 // empréstimo já foi devolvido) e escreve o DTO.
 func responderEmprestimo(w http.ResponseWriter, r *http.Request, status int, e domain.Emprestimo, agora time.Time) {
@@ -361,6 +394,7 @@ func responderEmprestimo(w http.ResponseWriter, r *http.Request, status int, e d
 		Inicio:     e.Inicio().UTC().Format(time.RFC3339),
 		Vencimento: e.Vencimento().Format("2006-01-02"),
 		Multa:      multa.StringFixed(2),
+		Renovacoes: e.Renovacoes(),
 	}
 	if !e.Aberto() {
 		d := e.Devolucao().UTC().Format(time.RFC3339)

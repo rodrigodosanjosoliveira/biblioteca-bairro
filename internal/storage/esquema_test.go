@@ -20,6 +20,7 @@ var constraintsEsperadas = map[string]string{
 	"emprestimo_livro_id_fkey":       "f",
 	"emprestimo_usuario_id_fkey":     "f",
 	"emprestimo_datas_finitas_check": "c",
+	"emprestimo_renovacoes_check":    "c",
 }
 
 var indicesEsperados = []string{
@@ -49,6 +50,7 @@ var colunasEsperadas = map[string]coluna{
 	"emprestimo.inicio":     {tipo: "timestamp with time zone", nula: "NO", identity: "NO"},
 	"emprestimo.vencimento": {tipo: "date", nula: "NO", identity: "NO"},
 	"emprestimo.devolucao":  {tipo: "timestamp with time zone", nula: "YES", identity: "NO"},
+	"emprestimo.renovacoes": {tipo: "integer", nula: "NO", identity: "NO"},
 }
 
 func checarCatalogo(t *testing.T, c *pgx.Conn, schema string) {
@@ -128,6 +130,7 @@ func checarCatalogo(t *testing.T, c *pgx.Conn, schema string) {
 		"livro_titulo_check":             {"btrim(titulo)", "<> ''"},
 		"usuario_nome_check":             {"btrim(nome)", "<> ''"},
 		"emprestimo_datas_finitas_check": {"isfinite(inicio)", "isfinite(vencimento)", "isfinite(devolucao)"},
+		"emprestimo_renovacoes_check":    {"renovacoes >= 0", "renovacoes <= 2"},
 	} {
 		for _, tr := range trechos {
 			if !strings.Contains(defs[nome], tr) {
@@ -169,6 +172,18 @@ func checarCatalogo(t *testing.T, c *pgx.Conn, schema string) {
 		if strings.Contains(d, "UNIQUE") || strings.Contains(d, "WHERE") || !strings.Contains(d, col) {
 			t.Errorf("%s = %q, want índice simples em %s", nome, d, col)
 		}
+	}
+
+	// Default do contador de renovações: constante 0 (backfill sem rewrite).
+	var defRenov string
+	err = c.QueryRow(ctx, `
+		SELECT COALESCE(column_default, '')
+		  FROM information_schema.columns
+		 WHERE table_schema = $1 AND table_name = 'emprestimo' AND column_name = 'renovacoes'`, schema).Scan(&defRenov)
+	if err != nil {
+		t.Errorf("consultar default de emprestimo.renovacoes: %v", err)
+	} else if defRenov != "0" {
+		t.Errorf("default de emprestimo.renovacoes = %q, want \"0\"", defRenov)
 	}
 
 	// Colunas.
@@ -257,6 +272,12 @@ func TestEsquemaRestricoes(t *testing.T) {
 		ini  = "'2026-03-10 10:00:00-03'"
 		venc = "'2026-03-24'"
 	)
+	// empRenov grava um empréstimo fechado (não conta para R4) com o
+	// contador de renovações dado.
+	empRenov := func(renov string) string {
+		return fmt.Sprintf("INSERT INTO emprestimo (livro_id, usuario_id, inicio, vencimento, devolucao, renovacoes) VALUES (%d, %d, %s, %s, '2026-03-12 10:00:00-03', %s)",
+			livroID, usuarioID, ini, venc, renov)
+	}
 
 	tests := []struct {
 		name       string
@@ -279,6 +300,10 @@ func TestEsquemaRestricoes(t *testing.T) {
 		{name: "inicio nulo", sql: emp("NULL", venc, "NULL"), code: "23502"},
 		{name: "vencimento nulo", sql: emp(ini, "NULL", "NULL"), code: "23502"},
 		{name: "livro inexistente", sql: fmt.Sprintf("INSERT INTO emprestimo (livro_id, usuario_id, inicio, vencimento) VALUES (%d, %d, %s, %s)", livroID+1000, usuarioID, ini, venc), code: "23503", constraint: "emprestimo_livro_id_fkey"},
+		{name: "renovacoes negativo", sql: empRenov("-1"), code: "23514", constraint: "emprestimo_renovacoes_check"},
+		{name: "renovacoes acima do limite", sql: empRenov("3"), code: "23514", constraint: "emprestimo_renovacoes_check"},
+		{name: "renovacoes muito acima do limite", sql: empRenov("2147483647"), code: "23514", constraint: "emprestimo_renovacoes_check"},
+		{name: "renovacoes nulo", sql: empRenov("NULL"), code: "23502"},
 		{name: "usuario inexistente", sql: fmt.Sprintf("INSERT INTO emprestimo (livro_id, usuario_id, inicio, vencimento) VALUES (%d, %d, %s, %s)", livroID, usuarioID+1000, ini, venc), code: "23503", constraint: "emprestimo_usuario_id_fkey"},
 	}
 	for _, tt := range tests {
@@ -296,6 +321,33 @@ func TestEsquemaRestricoes(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("renovacoes: default 0 e faixa 0..2 aceita", func(t *testing.T) {
+		var got int
+		if err := c.QueryRow(ctx, emp(ini, venc, "'2026-03-12 10:00:00-03'")+" RETURNING renovacoes").Scan(&got); err != nil {
+			t.Fatalf("INSERT sem a coluna: %v", err)
+		}
+		if got != 0 {
+			t.Errorf("renovacoes sem valor explícito = %d, want 0", got)
+		}
+		for _, v := range []string{"0", "1", "2"} {
+			if _, err := c.Exec(ctx, empRenov(v)); err != nil {
+				t.Errorf("renovacoes = %s recusado: %v", v, err)
+			}
+		}
+	})
+
+	t.Run("renovacoes: UPDATE para 3 recusado", func(t *testing.T) {
+		var id int64
+		if err := c.QueryRow(ctx, empRenov("2")+" RETURNING id").Scan(&id); err != nil {
+			t.Fatalf("inserir: %v", err)
+		}
+		_, err := c.Exec(ctx, "UPDATE emprestimo SET renovacoes = renovacoes + 1 WHERE id = $1", id)
+		pe := pgErro(t, err)
+		if pe.Code != "23514" || pe.ConstraintName != "emprestimo_renovacoes_check" {
+			t.Errorf("erro = %s/%s, want 23514/emprestimo_renovacoes_check", pe.Code, pe.ConstraintName)
+		}
+	})
 
 	t.Run("R4 no banco: segundo aberto do mesmo livro", func(t *testing.T) {
 		if _, err := c.Exec(ctx, emp(ini, venc, "NULL")); err != nil {

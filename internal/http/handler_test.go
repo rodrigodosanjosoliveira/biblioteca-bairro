@@ -39,6 +39,7 @@ func TestMapaDeErros(t *testing.T) {
 		usuarios  = "/usuarios"
 		empr      = "/livros/1/emprestimo"
 		devolucao = "/livros/1/devolucao"
+		renovacao = "/livros/1/renovacao"
 	)
 	corpoEmpr := `{"usuario_id":2}`
 	corpoLivro := `{"titulo":"Dom Casmurro"}`
@@ -61,6 +62,7 @@ func TestMapaDeErros(t *testing.T) {
 		{name: "campo desconhecido", method: http.MethodPost, path: livros, body: `{"titulo":"a","autor":"b"}`, status: 400, codigo: "corpo_invalido", semRepo: true},
 		{name: "dado extra depois do objeto", method: http.MethodPost, path: livros, body: `{"titulo":"a"}{"titulo":"b"}`, status: 400, codigo: "corpo_invalido", semRepo: true},
 		{name: "corpo na devolucao", method: http.MethodPost, path: devolucao, body: `{}`, status: 400, codigo: "corpo_invalido", semRepo: true},
+		{name: "corpo na renovacao", method: http.MethodPost, path: renovacao, body: `{}`, status: 400, codigo: "corpo_invalido", semRepo: true},
 
 		// 422 de validação
 		{name: "titulo vazio pelo corpo", method: http.MethodPost, path: livros, body: `{"titulo":"   "}`, status: 422, codigo: "titulo_vazio"},
@@ -77,6 +79,8 @@ func TestMapaDeErros(t *testing.T) {
 		{name: "ErrEmprestimoNaoEncontrado no GET", method: http.MethodGet, path: empr, setup: func(f *fixture) { f.repo.errBuscar = storage.ErrEmprestimoNaoEncontrado }, status: 404, codigo: "emprestimo_aberto_nao_encontrado"},
 		{name: "ErrEmprestimoNaoEncontrado na busca da devolucao", method: http.MethodPost, path: devolucao, setup: func(f *fixture) { f.repo.errBuscar = storage.ErrEmprestimoNaoEncontrado }, status: 404, codigo: "emprestimo_aberto_nao_encontrado"},
 		{name: "ErrEmprestimoNaoEncontrado ao registrar devolucao", method: http.MethodPost, path: devolucao, setup: func(f *fixture) { f.repo.errRegistrar = storage.ErrEmprestimoNaoEncontrado }, status: 404, codigo: "emprestimo_aberto_nao_encontrado"},
+		{name: "ErrEmprestimoNaoEncontrado na busca da renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errBuscar = storage.ErrEmprestimoNaoEncontrado }, status: 404, codigo: "emprestimo_aberto_nao_encontrado"},
+		{name: "ErrEmprestimoNaoEncontrado ao registrar renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = storage.ErrEmprestimoNaoEncontrado }, status: 404, codigo: "emprestimo_aberto_nao_encontrado"},
 
 		// 409
 		{name: "ErrLivroJaEmprestado", method: http.MethodPost, path: empr, body: corpoEmpr, setup: func(f *fixture) { f.repo.errAbrir = storage.ErrLivroJaEmprestado }, status: 409, codigo: "livro_ja_emprestado"},
@@ -86,6 +90,17 @@ func TestMapaDeErros(t *testing.T) {
 			f.repo.buscarRet = emprestimo(t, 77, 1, 2, inicioPadrao(), inicioPadrao().Add(time.Hour))
 		}, status: 409, codigo: "emprestimo_ja_devolvido"},
 		{name: "ErrEmprestimoDivergente", method: http.MethodPost, path: devolucao, setup: func(f *fixture) { f.repo.errRegistrar = storage.ErrEmprestimoDivergente }, status: 409, codigo: "emprestimo_alterado"},
+		{name: "ErrEmprestimoVencido do Renovar", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.agora = time.Date(2026, 3, 25, 0, 0, 0, 0, sp) }, status: 409, codigo: "emprestimo_vencido"},
+		{name: "ErrEmprestimoVencido do repositorio", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = envolver(domain.ErrEmprestimoVencido) }, status: 409, codigo: "emprestimo_vencido"},
+		{name: "ErrLimiteRenovacoes do Renovar", method: http.MethodPost, path: renovacao, setup: func(f *fixture) {
+			f.repo.buscarRet = emprestimoRenovado(t, 77, 1, 2, inicioPadrao(), time.Date(2026, 4, 21, 12, 0, 0, 0, sp), 2)
+		}, status: 409, codigo: "limite_renovacoes_atingido"},
+		{name: "ErrLimiteRenovacoes do repositorio", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = envolver(domain.ErrLimiteRenovacoes) }, status: 409, codigo: "limite_renovacoes_atingido"},
+		{name: "ErrEmprestimoJaDevolvido do Renovar", method: http.MethodPost, path: renovacao, setup: func(f *fixture) {
+			f.repo.buscarRet = emprestimo(t, 77, 1, 2, inicioPadrao(), inicioPadrao().Add(time.Hour))
+		}, status: 409, codigo: "emprestimo_ja_devolvido"},
+		{name: "ErrEmprestimoJaDevolvido ao registrar renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = domain.ErrEmprestimoJaDevolvido }, status: 409, codigo: "emprestimo_ja_devolvido"},
+		{name: "ErrEmprestimoDivergente na renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = storage.ErrEmprestimoDivergente }, status: 409, codigo: "emprestimo_alterado"},
 
 		// 503
 		{name: "DeadlineExceeded em livros", method: http.MethodPost, path: livros, body: corpoLivro, setup: func(f *fixture) { f.repo.errInserirLivro = fmt.Errorf("storage: %w", context.DeadlineExceeded) }, status: 503, codigo: "indisponivel"},
@@ -93,6 +108,7 @@ func TestMapaDeErros(t *testing.T) {
 		{name: "DeadlineExceeded no emprestimo", method: http.MethodPost, path: empr, body: corpoEmpr, setup: func(f *fixture) { f.repo.errAbrir = context.DeadlineExceeded }, status: 503, codigo: "indisponivel"},
 		{name: "DeadlineExceeded no GET", method: http.MethodGet, path: empr, setup: func(f *fixture) { f.repo.errBuscar = context.DeadlineExceeded }, status: 503, codigo: "indisponivel"},
 		{name: "Canceled ao registrar devolucao", method: http.MethodPost, path: devolucao, setup: func(f *fixture) { f.repo.errRegistrar = context.Canceled }, status: 503, codigo: "indisponivel"},
+		{name: "DeadlineExceeded ao registrar renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = fmt.Errorf("storage: %w", context.DeadlineExceeded) }, status: 503, codigo: "indisponivel"},
 
 		// 500
 		{name: "ErrDevolucaoAntesDoInicio do Devolver", method: http.MethodPost, path: devolucao, setup: func(f *fixture) { f.agora = inicioPadrao().AddDate(0, 0, -1) }, status: 500, codigo: "erro_interno"},
@@ -106,6 +122,13 @@ func TestMapaDeErros(t *testing.T) {
 		{name: "erroBanco com PgError", method: http.MethodPost, path: usuarios, body: corpoUsuario, setup: func(f *fixture) { f.repo.errInserirUsuario = pgErroSecreto() }, status: 500, codigo: "erro_interno"},
 		{name: "erro desconhecido", method: http.MethodGet, path: empr, setup: func(f *fixture) { f.repo.errBuscar = errors.New("dial tcp host=segredo user=segredo") }, status: 500, codigo: "erro_interno"},
 		{name: "erro desconhecido no registro", method: http.MethodPost, path: devolucao, setup: func(f *fixture) { f.repo.errRegistrar = errors.New("host=segredo") }, status: 500, codigo: "erro_interno"},
+		{name: "relogio zerado na renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.agora = time.Time{} }, status: 500, codigo: "erro_interno"},
+		{name: "ErrRenovacoesInvalidas do repositorio", method: http.MethodPost, path: renovacao, setup: func(f *fixture) {
+			f.repo.errBuscar = fmt.Errorf("storage: empréstimo gravado inválido: %w", domain.ErrRenovacoesInvalidas)
+		}, status: 500, codigo: "erro_interno"},
+		{name: "ErrEmprestimoInvalido ao registrar renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = domain.ErrEmprestimoInvalido }, status: 500, codigo: "erro_interno"},
+		{name: "erroBanco com PgError na renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = pgErroSecreto() }, status: 500, codigo: "erro_interno"},
+		{name: "erro desconhecido ao registrar renovacao", method: http.MethodPost, path: renovacao, setup: func(f *fixture) { f.repo.errRenovar = errors.New("host=segredo") }, status: 500, codigo: "erro_interno"},
 	}
 
 	mensagens := map[string]string{}
@@ -159,12 +182,20 @@ func TestContratoSaidaLivroEUsuario(t *testing.T) {
 	}
 }
 
-// emprestimoJSON confere o DTO de empréstimo; devolucao "" significa null.
+// emprestimoJSON confere o DTO de empréstimo sem renovações; devolucao ""
+// significa null.
 func emprestimoJSON(t *testing.T, body []byte, id, livroID, usuarioID, inicio, vencimento, devolucao, multa string) {
 	t.Helper()
+	emprestimoJSONRenovacoes(t, body, id, livroID, usuarioID, inicio, vencimento, devolucao, multa, "0")
+}
+
+// emprestimoJSONRenovacoes confere o DTO de empréstimo, inclusive o número
+// de renovações (número JSON).
+func emprestimoJSONRenovacoes(t *testing.T, body []byte, id, livroID, usuarioID, inicio, vencimento, devolucao, multa, renovacoes string) {
+	t.Helper()
 	m := objetoJSON(t, body)
-	exigirChaves(t, m, "id", "livro_id", "usuario_id", "inicio", "vencimento", "devolucao", "multa")
-	nums := map[string]string{"id": id, "livro_id": livroID, "usuario_id": usuarioID}
+	exigirChaves(t, m, "id", "livro_id", "usuario_id", "inicio", "vencimento", "devolucao", "multa", "renovacoes")
+	nums := map[string]string{"id": id, "livro_id": livroID, "usuario_id": usuarioID, "renovacoes": renovacoes}
 	for k, v := range nums {
 		if m[k] != json.Number(v) {
 			t.Errorf("%s = %#v, want número %s", k, m[k], v)
@@ -378,6 +409,8 @@ func TestAuthAntesDeTudo(t *testing.T) {
 		{name: "corpo invalido", method: http.MethodPost, path: "/livros", body: `{"x":`},
 		{name: "corpo grande", method: http.MethodPost, path: "/livros", body: grande},
 		{name: "corpo na devolucao", method: http.MethodPost, path: "/livros/1/devolucao", body: "x"},
+		{name: "id invalido na renovacao", method: http.MethodPost, path: "/livros/abc/renovacao"},
+		{name: "corpo na renovacao", method: http.MethodPost, path: "/livros/1/renovacao", body: "x"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -551,6 +584,14 @@ func TestDecodificacaoDoCorpo(t *testing.T) {
 		{name: "devolucao com newline", path: "/livros/1/devolucao", body: "\n", status: 400, codigo: "corpo_invalido"},
 		{name: "devolucao com objeto vazio", path: "/livros/1/devolucao", body: "{}", status: 400, codigo: "corpo_invalido"},
 		{name: "devolucao com null", path: "/livros/1/devolucao", body: "null", status: 400, codigo: "corpo_invalido"},
+
+		// renovacao: qualquer byte é corpo inválido (sem data vinda do cliente)
+		{name: "renovacao sem corpo", path: "/livros/1/renovacao", body: "", status: 200},
+		{name: "renovacao com espaço", path: "/livros/1/renovacao", body: " ", status: 400, codigo: "corpo_invalido"},
+		{name: "renovacao com newline", path: "/livros/1/renovacao", body: "\n", status: 400, codigo: "corpo_invalido"},
+		{name: "renovacao com objeto vazio", path: "/livros/1/renovacao", body: "{}", status: 400, codigo: "corpo_invalido"},
+		{name: "renovacao com data do cliente", path: "/livros/1/renovacao", body: `{"vencimento":"2030-01-01"}`, status: 400, codigo: "corpo_invalido"},
+		{name: "renovacao com null", path: "/livros/1/renovacao", body: "null", status: 400, codigo: "corpo_invalido"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -589,6 +630,7 @@ func TestParametroID(t *testing.T) {
 		{method: http.MethodPost, sufixo: "/emprestimo", body: `{"usuario_id":2}`},
 		{method: http.MethodPost, sufixo: "/devolucao"},
 		{method: http.MethodGet, sufixo: "/emprestimo"},
+		{method: http.MethodPost, sufixo: "/renovacao"},
 	}
 	for _, a := range alvos {
 		for _, iv := range invalidos {
@@ -633,6 +675,18 @@ func TestParametroID(t *testing.T) {
 			}
 		})
 	}
+	for _, v := range validos {
+		t.Run("POST renovacao/"+v.seg, func(t *testing.T) {
+			f := novaFixture(t)
+			rec := f.do(http.MethodPost, "/livros/"+v.seg+"/renovacao", "", true)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (corpo %s)", rec.Code, rec.Body.String())
+			}
+			if f.repo.buscarRecebido != v.want {
+				t.Errorf("livroID = %d, want %d", f.repo.buscarRecebido, v.want)
+			}
+		})
+	}
 	t.Run("POST emprestimo/007", func(t *testing.T) {
 		f := novaFixture(t)
 		rec := f.do(http.MethodPost, "/livros/007/emprestimo", `{"usuario_id":2}`, true)
@@ -656,7 +710,9 @@ func TestMuxNotFoundEMethodNotAllowed(t *testing.T) {
 		{name: "raiz", method: http.MethodGet, path: "/", status: 404},
 		{name: "rota inexistente", method: http.MethodGet, path: "/inexistente", status: 404},
 		{name: "livro sem subrota", method: http.MethodGet, path: "/livros/1", auth: true, status: 404},
-		{name: "subrota desconhecida", method: http.MethodPost, path: "/livros/1/renovacao", auth: true, status: 404},
+		{name: "subrota desconhecida", method: http.MethodPost, path: "/livros/1/inexistente", auth: true, status: 404},
+		{name: "GET na renovacao", method: http.MethodGet, path: "/livros/1/renovacao", auth: true, status: 405},
+		{name: "PUT na renovacao", method: http.MethodPut, path: "/livros/1/renovacao", auth: true, status: 405},
 		{name: "GET em /livros", method: http.MethodGet, path: "/livros", auth: true, status: 405},
 		{name: "DELETE no emprestimo", method: http.MethodDelete, path: "/livros/1/emprestimo", auth: true, status: 405},
 		{name: "GET na devolucao", method: http.MethodGet, path: "/livros/1/devolucao", auth: true, status: 405},

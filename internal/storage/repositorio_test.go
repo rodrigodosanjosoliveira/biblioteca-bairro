@@ -38,6 +38,9 @@ func checarEmprestimo(t *testing.T, got, want domain.Emprestimo) {
 	if got.Aberto() != want.Aberto() {
 		t.Errorf("Aberto() = %v, want %v", got.Aberto(), want.Aberto())
 	}
+	if got.Renovacoes() != want.Renovacoes() {
+		t.Errorf("Renovacoes() = %d, want %d", got.Renovacoes(), want.Renovacoes())
+	}
 }
 
 // checarVencimentoSP confere 12:00:00 em SP na data civil a/m/d.
@@ -323,7 +326,7 @@ func TestAbrirEmprestimoRecusas(t *testing.T) {
 	sp := saoPaulo(t)
 	inicio := time.Date(2026, 3, 10, 10, 0, 0, 0, sp)
 
-	ja, err := domain.ReidratarEmprestimo(7, f.livro.ID, f.usuario.ID, inicio, time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), time.Time{})
+	ja, err := domain.ReidratarEmprestimo(7, f.livro.ID, f.usuario.ID, inicio, time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), time.Time{}, 0)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo: %v", err)
 	}
@@ -529,7 +532,7 @@ func TestRegistrarDevolucao(t *testing.T) {
 		t.Errorf("devolução gravada = %v, want %v (primeira intacta)", gravada, primeira.Devolucao())
 	}
 
-	inexistente, err := domain.ReidratarEmprestimo(aberto.ID()+1000, f.livro.ID, f.usuario.ID, aberto.Inicio(), aberto.Vencimento(), time.Date(2026, 3, 15, 10, 0, 0, 0, sp))
+	inexistente, err := domain.ReidratarEmprestimo(aberto.ID()+1000, f.livro.ID, f.usuario.ID, aberto.Inicio(), aberto.Vencimento(), time.Date(2026, 3, 15, 10, 0, 0, 0, sp), 0)
 	if err != nil {
 		t.Fatalf("ReidratarEmprestimo: %v", err)
 	}
@@ -565,7 +568,7 @@ func TestRegistrarDevolucaoInicioDivergente(t *testing.T) {
 				t.Fatalf("AbrirEmprestimo: %v", err)
 			}
 
-			forjado, err := domain.ReidratarEmprestimo(aberto.ID(), aberto.LivroID(), aberto.UsuarioID(), tt.inicio, aberto.Vencimento(), time.Time{})
+			forjado, err := domain.ReidratarEmprestimo(aberto.ID(), aberto.LivroID(), aberto.UsuarioID(), tt.inicio, aberto.Vencimento(), time.Time{}, 0)
 			if err != nil {
 				t.Fatalf("ReidratarEmprestimo: %v", err)
 			}

@@ -147,7 +147,7 @@ func (r *Repositorio) BuscarUsuario(ctx context.Context, id int64) (domain.Usuar
 	return got, nil
 }
 
-const colunasEmprestimo = `id, livro_id, usuario_id, inicio, vencimento, devolucao`
+const colunasEmprestimo = `id, livro_id, usuario_id, inicio, vencimento, devolucao, renovacoes`
 
 // AbrirEmprestimo grava um empréstimo novo (de NovoEmprestimo: sem ID e
 // aberto) e devolve o empréstimo reidratado com o ID gerado. Empréstimo
@@ -217,6 +217,51 @@ func (r *Repositorio) RegistrarDevolucao(ctx context.Context, e domain.Emprestim
 	return domain.Emprestimo{}, ErrEmprestimoDivergente
 }
 
+// RegistrarRenovacao grava a renovação de e (persistido, aberto e já
+// renovado em memória por Renovar) e devolve o empréstimo relido. O UPDATE é
+// condicional (concorrência otimista, o contador funciona como versão): grava
+// o vencimento e o contador de e só se a linha com o ID ainda estiver aberta,
+// tiver o mesmo início de e e o contador anterior (e.Renovacoes()-1). O
+// cálculo do novo vencimento e do contador fica no domínio; o banco só grava
+// e confere.
+//
+// Sem linha atualizada, o diagnóstico devolve ErrEmprestimoNaoEncontrado se o
+// ID não existir, domain.ErrEmprestimoJaDevolvido se a linha já estiver
+// devolvida e ErrEmprestimoDivergente em qualquer outro caso (início ou
+// contador divergente, corrida perdida). Empréstimo sem ID, inválido,
+// devolvido ou com contador fora de 1..domain.LimiteRenovacoes é recusado com
+// domain.ErrEmprestimoInvalido antes de qualquer SQL.
+func (r *Repositorio) RegistrarRenovacao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error) {
+	if e.ID() <= 0 || !e.Aberto() || !valido(e) || e.Renovacoes() < 1 || e.Renovacoes() > domain.LimiteRenovacoes {
+		return domain.Emprestimo{}, domain.ErrEmprestimoInvalido
+	}
+	row := r.db.QueryRow(ctx,
+		`UPDATE emprestimo SET vencimento = $2, renovacoes = $3
+		  WHERE id = $1 AND devolucao IS NULL AND inicio = $4 AND renovacoes = $5
+		 RETURNING `+colunasEmprestimo,
+		e.ID(), vencimentoParaDate(e.Vencimento()), e.Renovacoes(), e.Inicio(), e.Renovacoes()-1)
+	got, err := lerEmprestimo(row)
+	if !errors.Is(err, ErrEmprestimoNaoEncontrado) {
+		return got, err
+	}
+
+	// Nenhuma linha atualizada: distingue inexistente, já devolvido e
+	// divergente.
+	var devolvido bool
+	err = r.db.QueryRow(ctx,
+		`SELECT devolucao IS NOT NULL FROM emprestimo WHERE id = $1`,
+		e.ID()).Scan(&devolvido)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return domain.Emprestimo{}, ErrEmprestimoNaoEncontrado
+	case err != nil:
+		return domain.Emprestimo{}, traduzirErro(err)
+	case devolvido:
+		return domain.Emprestimo{}, domain.ErrEmprestimoJaDevolvido
+	}
+	return domain.Emprestimo{}, ErrEmprestimoDivergente
+}
+
 // BuscarEmprestimoAbertoPorLivro lê o empréstimo aberto do livro; sem
 // empréstimo aberto devolve ErrEmprestimoNaoEncontrado.
 func (r *Repositorio) BuscarEmprestimoAbertoPorLivro(ctx context.Context, livroID int64) (domain.Emprestimo, error) {
@@ -244,8 +289,9 @@ func lerEmprestimo(row pgx.Row) (domain.Emprestimo, error) {
 		id, livroID, usuarioID int64
 		inicio, vencimento     time.Time
 		devolucao              *time.Time
+		renovacoes             int
 	)
-	err := row.Scan(&id, &livroID, &usuarioID, &inicio, &vencimento, &devolucao)
+	err := row.Scan(&id, &livroID, &usuarioID, &inicio, &vencimento, &devolucao, &renovacoes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Emprestimo{}, ErrEmprestimoNaoEncontrado
 	}
@@ -256,7 +302,7 @@ func lerEmprestimo(row pgx.Row) (domain.Emprestimo, error) {
 	if devolucao != nil {
 		dev = *devolucao
 	}
-	e, err := domain.ReidratarEmprestimo(id, livroID, usuarioID, inicio, vencimento, dev)
+	e, err := domain.ReidratarEmprestimo(id, livroID, usuarioID, inicio, vencimento, dev, renovacoes)
 	if err != nil {
 		return domain.Emprestimo{}, fmt.Errorf("storage: empréstimo gravado inválido: %w", err)
 	}

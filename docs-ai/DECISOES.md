@@ -535,3 +535,85 @@ Testes que o dev não pôde alterar e ficam para decisão: `TestPadroesDeTimeout
 `TestFecharRespeitaOPrazoSeALimpezaTravar` (só prova o teto), lacunas de C1 e
 U+202E nos testes de `nomeSeguro`, `ErroSessaoAlterada` sem teste que o afirme
 nem teste de `SET ROLE`, e sem teste de schema com aspas.
+
+## D-17 — Renovação de empréstimo: +14 dias sobre o vencimento atual, até 2 vezes, com CAS no contador
+
+Decisões do `architecture-guardrails` e do `data-model` na DEL-011, a confirmar
+pelo humano no PR. Complementa a D-11 (vencimento), a D-13 (reidratação e
+regras de migração), a D-14 (sem relógio no domínio) e a D-15 (contrato HTTP).
+
+**Regra de negócio.**
+
+- Base da extensão: o vencimento atual + `PrazoRenovacaoDias` (14) dias civis,
+  às 12:00 em `America/Sao_Paulo` (D-11). Contar a partir de "agora" encurtaria
+  o prazo numa renovação antecipada, o que contradiz "mais 14 dias".
+- "Não vencido": a renovação vale até o fim do dia civil (SP) do vencimento
+  (`meiaNoiteUTC(ref) > meiaNoiteUTC(vencimento)` é vencido), a mesma fronteira
+  em que a multa começa a contar. O instante 12:00 é convenção (D-11), não
+  fronteira.
+- "No máximo 2 vezes" (`LimiteRenovacoes`): 2 renovações bem-sucedidas, com
+  vencimento final igual à data civil do início + 42 dias; a 3ª tentativa é
+  recusada.
+- Ordem de recusa em `(*Emprestimo).Renovar(ref)`: início zero
+  (`ErrEmprestimoInvalido`), devolvido (`ErrEmprestimoJaDevolvido`), `ref` zero
+  (`ErrReferenciaZero`), vencido (`ErrEmprestimoVencido`) e limite
+  (`ErrLimiteRenovacoes`). Quando valem vencido e limite, ganha o vencido. Em
+  erro o empréstimo não muda. Sem relógio no domínio: `ref` vem de quem chama.
+- `ReidratarEmprestimo` ganha o 7º parâmetro `renovacoes` e recusa valor fora de
+  0..2 com `ErrRenovacoesInvalidas` (validação por último). Continua sem exigir
+  coerência entre início, vencimento e contador (D-13).
+
+**Persistência.** Migração `0002_renovacao_emprestimo`: coluna
+`renovacoes integer NOT NULL DEFAULT 0` (fast default, sem rewrite no PG 11+) e
+`emprestimo_renovacoes_check CHECK (renovacoes >= 0 AND renovacoes <= 2)` no
+mesmo `ALTER TABLE`; o CHECK varre a tabela sob ACCESS EXCLUSIVE, aceito pelo
+tamanho da tabela e limitado pelos timeouts do executor (D-16). O down remove a
+constraint e a coluna, sem `IF EXISTS` nem `CASCADE`, e é destrutivo só no
+contador. `RegistrarRenovacao` grava com UPDATE condicional (concorrência
+otimista, o contador funciona como versão):
+`WHERE id = $1 AND devolucao IS NULL AND inicio = $4 AND renovacoes = $5`, com
+`$5 = Renovacoes()-1` calculado em Go. O SQL não incrementa nem soma datas: a
+regra fica no domínio e o banco só grava e confere. Sem linha atualizada, o
+diagnóstico por PK devolve `ErrEmprestimoNaoEncontrado`,
+`domain.ErrEmprestimoJaDevolvido` ou `ErrEmprestimoDivergente`. Sem
+`SELECT ... FOR UPDATE` e sem transação no handler.
+
+**Invariante do CAS.** O CAS não confere o vencimento anterior; isso é correto
+porque toda escrita de vencimento depois do INSERT incrementa `renovacoes`
+(hoje só `RegistrarRenovacao`). Quem criar outro escritor do vencimento precisa
+incrementar o contador ou passar a conferir o vencimento no `WHERE`.
+
+**Limite duplicado no banco.** O literal `2` do CHECK duplica
+`domain.LimiteRenovacoes` de propósito, como segunda barreira. Mudar o limite
+exige migração nova, além da constante.
+
+**HTTP.** `POST /livros/{id}/renovacao`, autenticado, `{id}` do livro, corpo
+vazio obrigatório e data do relógio injetado (D-15 H4). Sucesso: 200 com o DTO
+do empréstimo. O campo `renovacoes` entra em todas as respostas de empréstimo
+(aditivo, mas quebra cliente com decodificação estrita). Códigos novos, ambos
+409 (conflito com o estado do recurso, não 422): `emprestimo_vencido`
+("empréstimo vencido") e `limite_renovacoes_atingido` ("limite de renovações
+atingido"). Sem empréstimo aberto, inclusive livro inexistente ou já devolvido,
+reaproveita `emprestimo_aberto_nao_encontrado` 404; uma corrida perdida dá
+`emprestimo_ja_devolvido` ou `emprestimo_alterado` 409. `ErrRenovacoesInvalidas`
+lido do banco é bug (500, `causa=bug_interno`).
+
+**Deploy e rollback.** O binário novo lê `renovacoes` em toda leitura de
+empréstimo. A ordem é `migrate up` da 0002 e depois o deploy do binário novo
+(o binário antigo funciona com o esquema novo); o inverso dá 500 (SQLSTATE
+42703) em todas as rotas de empréstimo. No rollback, reverter o binário antes e
+só então rodar o down 0002 manualmente, com
+`DELETE FROM migracao_aplicada WHERE versao = 2` na mesma transação
+(`docs-ai/RUNBOOK-MIGRACAO.md`). Os vencimentos já estendidos ficam; uma nova
+subida da 0002 zera o contador, e esses empréstimos poderiam renovar de novo.
+
+**Motivo:** regra no domínio, determinística e testável sem banco; o banco
+garante o limite e a ausência de renovação dupla sob concorrência, sem lock
+pessimista; códigos e contrato seguem o catálogo existente.
+
+**Consequências:** histórico de renovações, limite e prazo configuráveis,
+autorização por dono do empréstimo (a API tem um token único: quem tem o token
+renova qualquer empréstimo) e notificações ficam fora até decisão nova. Os
+testes de banco de `internal/migrate` exigem PostgreSQL com acesso `trust`
+(`TestControleAdotadoDeOutroDono` falha com `scram`), como já ocorre no CI
+(D-13).
