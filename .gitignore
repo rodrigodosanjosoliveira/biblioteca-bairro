@@ -29,3 +29,6 @@ credentials
 .DS_Store
 Thumbs.db
 *.tmp
+
+# Log das decisões do hook (hook_log), local de cada máquina
+/.pipeline-claude/

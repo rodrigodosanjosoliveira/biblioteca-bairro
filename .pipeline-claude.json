@@ -4,6 +4,7 @@
   "database": "postgres",
   "git_provider": "github",
   "base_ref": "origin/main",
+  "hook_log": ".pipeline-claude/hook-log.jsonl",
 
   "deliveries_dir": "docs-ai/deliveries",
   "index_file": "docs-ai/deliveries/INDEX.md",
@@ -48,7 +49,9 @@
     ".gitlab-ci.yml",
     "Makefile",
     "internal/http/",
-    "internal/config/"
+    "internal/config/",
+    "cmd/biblioteca-bairro/",
+    "internal/migrate/"
   ],
   "auto_flags": {
     "require_security": ["go.mod", "go.sum"]
@@ -56,7 +59,7 @@
 
   "sensors": [
     {"name": "vet", "cmd": ["go", "vet", "./..."]},
-    {"name": "test", "cmd": ["go", "test", "./..."]},
+    {"name": "test", "cmd": ["go", "test", "-json", "./..."], "format": "go-test-json", "skips": "warn"},
     {"name": "build", "cmd": ["go", "build", "./..."]},
     {"name": "vuln", "cmd": ["go", "run", "golang.org/x/vuln/cmd/govulncheck@v1.8.0", "./..."]},
     {"name": "mod_verify", "cmd": ["go", "mod", "verify"]}
