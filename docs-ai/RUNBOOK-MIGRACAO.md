@@ -116,5 +116,7 @@ checksum dos `.up.sql`. Sugestão ao humano, fora do escopo da DEL-008:
 
 Argumento desconhecido agora sai com código 2 e imprime
 `uso: biblioteca-bairro [migrate up | migrate status]`; antes os argumentos eram
-ignorados. Vale para qualquer entrypoint que passe flags ao binário (o
-repositório não tem Dockerfile).
+ignorados. Vale para qualquer entrypoint que passe flags ao binário. O
+`Dockerfile` do repositório (DEL-012) usa `ENTRYPOINT ["/biblioteca-bairro"]` em
+forma exec, sem flags nem wrapper de shell; a migração roda na mesma imagem com
+`docker run <imagem> migrate up` (ou `migrate status`), antes de subir a API.
