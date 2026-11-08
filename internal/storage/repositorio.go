@@ -32,7 +32,14 @@ var (
 	// aberto, mas o início difere do lido do banco (valor reidratado à mão
 	// ou adulterado). Nada é gravado.
 	ErrEmprestimoDivergente = errors.New("storage: empréstimo diverge do gravado")
+	// ErrListagemInvalida indica chamada de ListarLivros com apos negativo ou
+	// limite fora de 1..LimiteListagemLivros. É erro de quem chama, não do
+	// cliente: a camada HTTP valida antes.
+	ErrListagemInvalida = errors.New("storage: parâmetros de listagem inválidos")
 )
+
+// LimiteListagemLivros é o máximo de livros por página de ListarLivros.
+const LimiteListagemLivros = 100
 
 // Nomes das constraints mapeadas para sentinelas (migrations/0001).
 const (
@@ -106,6 +113,43 @@ func (r *Repositorio) BuscarLivro(ctx context.Context, id int64) (domain.Livro, 
 		return domain.Livro{}, traduzirErro(err)
 	}
 	return got, nil
+}
+
+// ListarLivros lê até limite livros com id > apos, em ordem crescente de id
+// (paginação keyset pela PK). O bool informa se há livros depois do último
+// devolvido. Sem livros, devolve slice vazia (não nil). Recusa, antes de
+// qualquer SQL, apos < 0 e limite fora de 1..LimiteListagemLivros com
+// ErrListagemInvalida.
+func (r *Repositorio) ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error) {
+	if apos < 0 || limite < 1 || limite > LimiteListagemLivros {
+		return nil, false, ErrListagemInvalida
+	}
+	// Uma linha a mais só para saber se há próxima página.
+	rows, err := r.db.Query(ctx,
+		`SELECT id, titulo FROM livro WHERE id > $1 ORDER BY id LIMIT $2`,
+		apos, limite+1)
+	if err != nil {
+		return nil, false, traduzirErro(err)
+	}
+	defer rows.Close()
+	livros := make([]domain.Livro, 0, limite)
+	temMais := false
+	for rows.Next() {
+		if len(livros) == limite {
+			temMais = true
+			break
+		}
+		var l domain.Livro
+		if err := rows.Scan(&l.ID, &l.Titulo); err != nil {
+			return nil, false, traduzirErro(err)
+		}
+		livros = append(livros, l)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, false, traduzirErro(err)
+	}
+	return livros, temMais, nil
 }
 
 // InserirUsuario grava u e devolve o usuário com o ID gerado. Recusa, antes
@@ -273,6 +317,18 @@ func (r *Repositorio) BuscarEmprestimoAbertoPorLivro(ctx context.Context, livroI
 		   FROM emprestimo
 		  WHERE livro_id = $1 AND devolucao IS NULL`,
 		livroID)
+	return lerEmprestimo(row)
+}
+
+// BuscarEmprestimo lê o empréstimo id, aberto ou devolvido; inexistente
+// devolve ErrEmprestimoNaoEncontrado.
+func (r *Repositorio) BuscarEmprestimo(ctx context.Context, id int64) (domain.Emprestimo, error) {
+	if id <= 0 {
+		return domain.Emprestimo{}, ErrEmprestimoNaoEncontrado
+	}
+	row := r.db.QueryRow(ctx,
+		`SELECT `+colunasEmprestimo+` FROM emprestimo WHERE id = $1`,
+		id)
 	return lerEmprestimo(row)
 }
 

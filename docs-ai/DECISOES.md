@@ -358,6 +358,9 @@ interna, e TLS e HSTS ficam a cargo do proxy. Autenticação completa,
 `GET /emprestimos/{id}`, listagens e paginação ficam para deliveries futuras,
 sem número fixado: a numeração prevista aqui (DEL-007 e DEL-008) foi ocupada
 pela atualização do pipeline-claude e pelo executor de migração (D-16).
+(`GET /emprestimos/{id}`, `GET /livros/{id}` e a listagem paginada de livros
+entraram na DEL-013, D-19; listagens de usuários e de empréstimos continuam
+pendentes.)
 Pendência humana H10 (acrescentar `internal/http/` e `internal/config/` a
 `security_surface_paths` no `.pipeline-claude.json`): resolvida na DEL-007.
 
@@ -661,3 +664,81 @@ binário diferente do da imagem. Correção de CVE na base ou no toolchain só
 entra com nova delivery. A assinatura cosign da distroless não foi verificada
 na DEL-012 (cosign ausente na máquina). `Dockerfile` e `.dockerignore` estão
 fora de `security_surface_paths` (sugestão ao humano, fora da sessão).
+
+## D-19 — Leituras da API: listagem de livros por cursor (keyset por `id`) e detalhes por ID
+
+Decisões do `pm-triage` e do `architecture-guardrails` na DEL-013, a confirmar
+pelo humano no PR. Estende o contrato da D-15 sem mudar nenhuma rota, código ou
+mensagem existente.
+
+**Rotas.** `GET /livros` (listagem paginada), `GET /livros/{id}` (detalhe do
+livro, mesmo DTO de `POST /livros`) e `GET /emprestimos/{id}` (empréstimo
+aberto ou devolvido, mesmo DTO de `GET /livros/{id}/emprestimo`, com
+`renovacoes` e multa). As três ficam atrás do mesmo `auth(...)` das rotas
+atuais, com `context.WithTimeout` por operação. Na multa, o empréstimo aberto
+usa `ref` = relógio injetado e o devolvido ignora `ref` (D-14). As rotas de
+detalhe ignoram a query string.
+
+**Paginação por cursor.**
+
+- Query params `limite` e `apos`. `limite`: inteiro decimal de 1 a 100, padrão
+  20; fora da faixa responde 400, sem clamp. `apos`: id exclusivo do último
+  item da página anterior, mesma gramática do id de path (`parseID`, inteiro
+  maior que zero); ausente = início.
+- Ordem fixa por `id` ascendente (ordem de cadastro), sem ordenação nem filtro
+  vindos do cliente, sem `OFFSET`, sem `COUNT` e sem total.
+- Resposta `{"itens":[{"id":..,"titulo":".."}],"proximo":<id>|null}`. `itens`
+  é sempre array (`[]` na página vazia). `proximo` é o id do **último item
+  entregue** quando há mais itens, e `null` caso contrário; nunca o id da linha
+  extra, o que faria a página seguinte pular um livro.
+- SQL único e parametrizado:
+  `SELECT id, titulo FROM livro WHERE id > $1 ORDER BY id LIMIT $2`, com
+  `$2 = limite+1` (no máximo 101 linhas) para detectar "tem mais". Atendido pela
+  PK `livro_pkey`, sem índice novo. Sem transação nem snapshot entre páginas:
+  consistência eventual entre páginas é aceita.
+- Query lida com `url.ParseQuery(r.URL.RawQuery)` com erro tratado (nunca
+  `r.URL.Query()`, que engole o erro). Chave fora de `{limite, apos}`, chave
+  repetida, escape inválido e `;` respondem 400, coerente com
+  `DisallowUnknownFields`.
+
+**Teto no storage.** O teto de 100 itens é a constante exportada
+`storage.LimiteListagemLivros`. O handler a reaproveita para responder 400, e o
+repositório revalida (`apos >= 0`, `1 <= limite <= 100`) antes do SQL como
+defesa em profundidade; violação no repositório é bug
+(`storage.ErrListagemInvalida`, 500 com `causa=bug_interno`). O teto e o `+1`
+ficam num só lugar.
+
+**Códigos novos (catálogo da D-15).** `parametro_invalido` 400 ("parâmetro de
+consulta inválido") para `limite`/`apos` inválidos ou chave desconhecida ou
+repetida; `emprestimo_nao_encontrado` 404 ("empréstimo não encontrado") só em
+`GET /emprestimos/{id}`. O mapeamento é local ao handler: `classificar()`
+continua levando `storage.ErrEmprestimoNaoEncontrado` a
+`emprestimo_aberto_nao_encontrado` nas rotas por livro. Mensagens fixas, sem
+eco do valor recebido; o log não registra `limite`, `apos`, URL nem query.
+
+**Riscos aceitos.**
+
+- Uma página pode ter cerca de 6 MB no pior caso (100 títulos de até 64 KiB,
+  limitados só pelo corpo). Se incomodar: teto no título no domínio ou teto
+  menor de página, em delivery própria.
+- Quem tem o token enumera o acervo inteiro (`GET /livros?apos=`) e todos os
+  empréstimos por id sequencial, com `livro_id`, `usuario_id`, datas e multa.
+  Fica dentro do modelo de token único e operador único (D-15, D-17). Se surgirem
+  vários tokens ou usuários finais com credencial própria,
+  `GET /emprestimos/{id}` vira IDOR e as três rotas precisam de autorização por
+  recurso.
+- Rejeitar parâmetro desconhecido quebra cliente que mande cache-buster
+  (`?_=...`); decisão consciente.
+- `proximo` (e os IDs) como número JSON acima de 2^53 perde precisão em
+  JavaScript; mesmo risco já existente para os IDs (D-15).
+
+**Motivo:** keyset pela PK é estável sob inserções e tem custo independente da
+posição; cursor em claro basta porque os IDs já são expostos e sequenciais;
+400 em vez de clamp mantém o contrato explícito; teto único evita divergência
+entre HTTP e storage.
+
+**Consequências:** filtros, busca por título, ordenação configurável, contagem
+total, indicação de "emprestado" na listagem, listagens de usuários e de
+empréstimos e `GET /usuarios/{id}` ficam fora até decisão nova. O off-by-one do
+cursor e a ordem só são pegos com banco: o CI precisa continuar rodando com
+PostgreSQL e `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`.

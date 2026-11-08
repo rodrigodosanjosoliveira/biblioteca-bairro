@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/domain"
 	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/http/middleware"
+	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/storage"
 )
 
 const (
@@ -42,6 +44,9 @@ type Repositorio interface {
 	BuscarEmprestimoAbertoPorLivro(ctx context.Context, livroID int64) (domain.Emprestimo, error)
 	RegistrarDevolucao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error)
 	RegistrarRenovacao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error)
+	BuscarLivro(ctx context.Context, id int64) (domain.Livro, error)
+	ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error)
+	BuscarEmprestimo(ctx context.Context, id int64) (domain.Emprestimo, error)
 }
 
 // Pinger verifica a disponibilidade do banco. *pgxpool.Pool o satisfaz.
@@ -132,6 +137,9 @@ func NovoHandler(d Dependencias) http.Handler {
 	mux.Handle("POST /livros/{id}/devolucao", auth(http.HandlerFunc(a.devolver)))
 	mux.Handle("POST /livros/{id}/renovacao", auth(http.HandlerFunc(a.renovar)))
 	mux.Handle("GET /livros/{id}/emprestimo", auth(http.HandlerFunc(a.consultarEmprestimo)))
+	mux.Handle("GET /livros", auth(http.HandlerFunc(a.listarLivros)))
+	mux.Handle("GET /livros/{id}", auth(http.HandlerFunc(a.obterLivro)))
+	mux.Handle("GET /emprestimos/{id}", auth(http.HandlerFunc(a.obterEmprestimo)))
 
 	return middleware.RequestID(
 		middleware.Log(d.Logger)(
@@ -210,6 +218,13 @@ type saidaLivro struct {
 type saidaUsuario struct {
 	ID   int64  `json:"id"`
 	Nome string `json:"nome"`
+}
+
+// saidaListaLivros é uma página de GET /livros. Proximo é o valor de apos
+// para a página seguinte (id do último item), null na última página.
+type saidaListaLivros struct {
+	Itens   []saidaLivro `json:"itens"`
+	Proximo *int64       `json:"proximo"`
 }
 
 // saidaEmprestimo é o DTO de empréstimo. Instantes em RFC 3339 UTC, o
@@ -319,6 +334,69 @@ func (a *api) consultarEmprestimo(w http.ResponseWriter, r *http.Request) {
 	responderEmprestimo(w, r, http.StatusOK, got, agora)
 }
 
+func (a *api) listarLivros(w http.ResponseWriter, r *http.Request) {
+	apos, limite, ok := lerParametrosListagem(r.URL.RawQuery)
+	if !ok {
+		falhar(w, r, codParametroInvalido)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	livros, temMais, err := a.repo.ListarLivros(ctx, apos, limite)
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	out := saidaListaLivros{Itens: make([]saidaLivro, 0, len(livros))}
+	for _, l := range livros {
+		out.Itens = append(out.Itens, saidaLivro{ID: l.ID, Titulo: l.Titulo})
+	}
+	if temMais && len(livros) > 0 {
+		p := livros[len(livros)-1].ID
+		out.Proximo = &p
+	}
+	responder(w, http.StatusOK, out)
+}
+
+func (a *api) obterLivro(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(r.PathValue("id"))
+	if !ok {
+		falhar(w, r, codIDInvalido)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	got, err := a.repo.BuscarLivro(ctx, id)
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	responder(w, http.StatusOK, saidaLivro{ID: got.ID, Titulo: got.Titulo})
+}
+
+func (a *api) obterEmprestimo(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(r.PathValue("id"))
+	if !ok {
+		falhar(w, r, codIDInvalido)
+		return
+	}
+	agora := a.agora()
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	got, err := a.repo.BuscarEmprestimo(ctx, id)
+	if errors.Is(err, storage.ErrEmprestimoNaoEncontrado) {
+		// Mapeamento local: nas rotas por livro o mesmo erro significa
+		// "nenhum empréstimo aberto" e continua assim em classificar.
+		falhar(w, r, codEmprestimoNaoEncontrado)
+		return
+	}
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	responderEmprestimo(w, r, http.StatusOK, got, agora)
+}
+
 func (a *api) devolver(w http.ResponseWriter, r *http.Request) {
 	livroID, ok := parseID(r.PathValue("id"))
 	if !ok {
@@ -415,6 +493,43 @@ func responder(w http.ResponseWriter, status int, v any) {
 func parseID(s string) (int64, bool) {
 	n, err := strconv.ParseInt(s, 10, 64)
 	return n, err == nil && n > 0
+}
+
+// limitePadraoListagem é o limite de GET /livros sem o parâmetro limite.
+const limitePadraoListagem = 20
+
+// lerParametrosListagem valida a query de GET /livros: só as chaves limite e
+// apos, cada uma no máximo uma vez. limite é inteiro decimal em
+// 1..storage.LimiteListagemLivros (padrão 20); apos segue a gramática de
+// parseID (padrão 0, início). Qualquer desvio devolve ok = false.
+func lerParametrosListagem(rawQuery string) (apos int64, limite int, ok bool) {
+	vals, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return 0, 0, false
+	}
+	limite = limitePadraoListagem
+	for k, vs := range vals {
+		if len(vs) != 1 {
+			return 0, 0, false
+		}
+		switch k {
+		case "limite":
+			n, err := strconv.ParseInt(vs[0], 10, 64)
+			if err != nil || n < 1 || n > storage.LimiteListagemLivros {
+				return 0, 0, false
+			}
+			limite = int(n)
+		case "apos":
+			n, valido := parseID(vs[0])
+			if !valido {
+				return 0, 0, false
+			}
+			apos = n
+		default:
+			return 0, 0, false
+		}
+	}
+	return apos, limite, true
 }
 
 // lerCorpo decodifica exatamente um objeto JSON em T, recusando campos

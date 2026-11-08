@@ -411,12 +411,20 @@ func TestAuthAntesDeTudo(t *testing.T) {
 		{name: "corpo na devolucao", method: http.MethodPost, path: "/livros/1/devolucao", body: "x"},
 		{name: "id invalido na renovacao", method: http.MethodPost, path: "/livros/abc/renovacao"},
 		{name: "corpo na renovacao", method: http.MethodPost, path: "/livros/1/renovacao", body: "x"},
+		{name: "parametro invalido na listagem", method: http.MethodGet, path: "/livros?limite=0"},
+		{name: "parametro desconhecido na listagem", method: http.MethodGet, path: "/livros?x=1"},
+		{name: "escape invalido na listagem", method: http.MethodGet, path: "/livros?%zz"},
+		{name: "id invalido no detalhe de livro", method: http.MethodGet, path: "/livros/abc"},
+		{name: "id invalido no detalhe de emprestimo", method: http.MethodGet, path: "/emprestimos/0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := novaFixture(t)
 			rec := f.do(tt.method, tt.path, tt.body, false)
 			checarErro(t, rec, http.StatusUnauthorized, "nao_autorizado", true)
+			if f.repo.nChamadas() != 0 {
+				t.Errorf("repositório chamado sem auth: %v", f.repo.chamadas)
+			}
 		})
 	}
 }
@@ -709,11 +717,17 @@ func TestMuxNotFoundEMethodNotAllowed(t *testing.T) {
 	}{
 		{name: "raiz", method: http.MethodGet, path: "/", status: 404},
 		{name: "rota inexistente", method: http.MethodGet, path: "/inexistente", status: 404},
-		{name: "livro sem subrota", method: http.MethodGet, path: "/livros/1", auth: true, status: 404},
+		{name: "livros com barra final", method: http.MethodGet, path: "/livros/", auth: true, status: 404},
+		{name: "livro com barra final", method: http.MethodGet, path: "/livros/1/", auth: true, status: 404},
+		{name: "listagem de emprestimos não existe", method: http.MethodGet, path: "/emprestimos", auth: true, status: 404},
+		{name: "subrota de emprestimo", method: http.MethodGet, path: "/emprestimos/1/x", auth: true, status: 404},
+		{name: "PUT no livro", method: http.MethodPut, path: "/livros/1", auth: true, status: 405},
+		{name: "DELETE no livro", method: http.MethodDelete, path: "/livros/1", auth: true, status: 405},
+		{name: "POST no emprestimo por id", method: http.MethodPost, path: "/emprestimos/1", auth: true, status: 405},
+		{name: "DELETE em /livros", method: http.MethodDelete, path: "/livros", auth: true, status: 405},
 		{name: "subrota desconhecida", method: http.MethodPost, path: "/livros/1/inexistente", auth: true, status: 404},
 		{name: "GET na renovacao", method: http.MethodGet, path: "/livros/1/renovacao", auth: true, status: 405},
 		{name: "PUT na renovacao", method: http.MethodPut, path: "/livros/1/renovacao", auth: true, status: 405},
-		{name: "GET em /livros", method: http.MethodGet, path: "/livros", auth: true, status: 405},
 		{name: "DELETE no emprestimo", method: http.MethodDelete, path: "/livros/1/emprestimo", auth: true, status: 405},
 		{name: "GET na devolucao", method: http.MethodGet, path: "/livros/1/devolucao", auth: true, status: 405},
 		{name: "POST no healthz", method: http.MethodPost, path: "/healthz", status: 405},

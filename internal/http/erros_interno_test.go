@@ -11,7 +11,69 @@ import (
 
 	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/domain"
 	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/http/middleware"
+	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/internal/storage"
 )
+
+// Códigos da DEL-013 no catálogo, com status e mensagem fixos, e os códigos
+// existentes intactos. classificar continua mapeando
+// storage.ErrEmprestimoNaoEncontrado para emprestimo_aberto_nao_encontrado (o
+// código novo é decidido só no handler do detalhe por id), e
+// storage.ErrListagemInvalida é bug interno.
+func TestCatalogoListagemEDetalhe(t *testing.T) {
+	t.Run("catalogo", func(t *testing.T) {
+		tests := []struct {
+			codigo   string
+			status   int
+			mensagem string
+		}{
+			{codigo: "parametro_invalido", status: 400, mensagem: "parâmetro de consulta inválido"},
+			{codigo: "emprestimo_nao_encontrado", status: 404, mensagem: "empréstimo não encontrado"},
+			{codigo: "emprestimo_aberto_nao_encontrado", status: 404, mensagem: "nenhum empréstimo aberto para o livro"},
+			{codigo: "livro_nao_encontrado", status: 404, mensagem: "livro não encontrado"},
+			{codigo: "id_invalido", status: 400, mensagem: "id inválido"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.codigo, func(t *testing.T) {
+				e, ok := catalogo[tt.codigo]
+				if !ok {
+					t.Fatalf("código %q fora do catálogo", tt.codigo)
+				}
+				if e.status != tt.status || e.mensagem != tt.mensagem {
+					t.Errorf("catálogo[%q] = %d %q, want %d %q", tt.codigo, e.status, e.mensagem, tt.status, tt.mensagem)
+				}
+			})
+		}
+	})
+
+	tests := []struct {
+		name      string
+		err       error
+		wantCod   string
+		wantCausa string
+	}{
+		{name: "ErrEmprestimoNaoEncontrado continua aberto_nao_encontrado", err: storage.ErrEmprestimoNaoEncontrado, wantCod: "emprestimo_aberto_nao_encontrado"},
+		{name: "ErrEmprestimoNaoEncontrado embrulhado", err: fmt.Errorf("x: %w", storage.ErrEmprestimoNaoEncontrado), wantCod: "emprestimo_aberto_nao_encontrado"},
+		{name: "ErrListagemInvalida é bug", err: storage.ErrListagemInvalida, wantCod: codErroInterno, wantCausa: causaBugInterno},
+		{name: "ErrListagemInvalida embrulhado é bug", err: fmt.Errorf("x: %w", storage.ErrListagemInvalida), wantCod: codErroInterno, wantCausa: causaBugInterno},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cod, attrs := classificar(tt.err)
+			if cod != tt.wantCod {
+				t.Fatalf("classificar = %q, want %q", cod, tt.wantCod)
+			}
+			causa := ""
+			for _, a := range attrs {
+				if a.Key == "causa" {
+					causa = a.Value.String()
+				}
+			}
+			if causa != tt.wantCausa {
+				t.Errorf("causa = %q, want %q", causa, tt.wantCausa)
+			}
+		})
+	}
+}
 
 // TestFalharCodigoForaDoCatalogo: código fora do catálogo vira erro_interno
 // (500), nunca status 0, e o log registra erro_interno.

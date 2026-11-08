@@ -52,6 +52,7 @@ func TestSentinelasStorage(t *testing.T) {
 		"ErrLivroJaEmprestado":       ErrLivroJaEmprestado,
 		"ErrJaPersistido":            ErrJaPersistido,
 		"ErrEmprestimoDivergente":    ErrEmprestimoDivergente,
+		"ErrListagemInvalida":        ErrListagemInvalida,
 	}
 	vistos := map[string]string{}
 	for nome, err := range sentinelas {
@@ -275,6 +276,100 @@ func renovadoSemID(t *testing.T) domain.Emprestimo {
 	return e
 }
 
+// listar adapta ListarLivros às tabelas de chamada; a lista devolvida com erro
+// precisa ser vazia.
+func listar(ctx context.Context, apos int64, limite int) func(r *Repositorio) error {
+	return func(r *Repositorio) error {
+		got, mais, err := r.ListarLivros(ctx, apos, limite)
+		if err != nil && (len(got) != 0 || mais) {
+			return fmt.Errorf("ListarLivros com erro devolveu %d itens e temMais=%v: %w", len(got), mais, err)
+		}
+		return err
+	}
+}
+
+// linhasComErro é um pgx.Rows que termina sem linhas com err em Err(), como
+// uma conexão perdida no meio da leitura.
+type linhasComErro struct {
+	err     error
+	fechado bool
+}
+
+func (l *linhasComErro) Close()                                       { l.fechado = true }
+func (l *linhasComErro) Err() error                                   { return l.err }
+func (l *linhasComErro) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (l *linhasComErro) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (l *linhasComErro) Next() bool                                   { return false }
+func (l *linhasComErro) Scan(...any) error                            { return l.err }
+func (l *linhasComErro) Values() ([]any, error)                       { return nil, l.err }
+func (l *linhasComErro) RawValues() [][]byte                          { return nil }
+func (l *linhasComErro) Conn() *pgx.Conn                              { return nil }
+func (l *linhasComErro) TypeMap() *pgtype.Map                         { return pgtype.NewMap() }
+
+// dbLinhasComErro devolve linhasComErro em Query.
+type dbLinhasComErro struct {
+	dbFalso
+	linhas *linhasComErro
+}
+
+func (d *dbLinhasComErro) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	d.chamadas++
+	return d.linhas, nil
+}
+
+// Erro no meio da leitura das linhas (rows.Err) não vira página vazia.
+func TestListarLivrosErroDuranteLeitura(t *testing.T) {
+	falha := errors.New("conexão perdida no meio")
+	db := &dbLinhasComErro{linhas: &linhasComErro{err: falha}}
+	got, mais, err := NovoRepositorio(db).ListarLivros(context.Background(), 0, 20)
+	if !errors.Is(err, falha) {
+		t.Errorf("erro = %v, want %v", err, falha)
+	}
+	if len(got) != 0 || mais {
+		t.Errorf("com erro devolveu %d itens e temMais=%v", len(got), mais)
+	}
+	if !db.linhas.fechado {
+		t.Error("rows não foi fechado")
+	}
+}
+
+// O teto da listagem é 100 (D-19): o handler valida contra ele e o
+// repositório revalida.
+func TestLimiteListagemLivros(t *testing.T) {
+	if LimiteListagemLivros != 100 {
+		t.Errorf("LimiteListagemLivros = %d, want 100", LimiteListagemLivros)
+	}
+}
+
+// Os extremos válidos da listagem passam pela validação e chegam ao banco.
+func TestListarLivrosLimitesAceitos(t *testing.T) {
+	tests := []struct {
+		name   string
+		apos   int64
+		limite int
+	}{
+		{name: "início com limite 1", apos: 0, limite: 1},
+		{name: "início com teto", apos: 0, limite: LimiteListagemLivros},
+		{name: "apos máximo", apos: 1<<63 - 1, limite: 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			falha := errors.New("dbFalso: chamado")
+			db := &dbFalso{err: falha}
+			got, mais, err := NovoRepositorio(db).ListarLivros(context.Background(), tt.apos, tt.limite)
+			if !errors.Is(err, falha) {
+				t.Errorf("erro = %v, want o erro do banco (validação não deveria recusar)", err)
+			}
+			if db.chamadas != 1 {
+				t.Errorf("%d chamada(s) ao banco, want 1", db.chamadas)
+			}
+			if len(got) != 0 || mais {
+				t.Errorf("com erro devolveu %d itens e temMais=%v, want nada", len(got), mais)
+			}
+		})
+	}
+}
+
 // As validações de entrada acontecem antes de qualquer SQL.
 func TestRepositorioRecusaAntesDoSQL(t *testing.T) {
 	ctx := context.Background()
@@ -348,6 +443,24 @@ func TestRepositorioRecusaAntesDoSQL(t *testing.T) {
 			_, err := r.RegistrarRenovacao(ctx, reidratadoRenovacoes(t, 5, 0))
 			return err
 		}, wantErr: domain.ErrEmprestimoInvalido},
+		{name: "ListarLivros com limite zero", chamar: listar(ctx, 0, 0), wantErr: ErrListagemInvalida},
+		{name: "ListarLivros com limite negativo", chamar: listar(ctx, 0, -1), wantErr: ErrListagemInvalida},
+		{name: "ListarLivros com limite acima do teto", chamar: listar(ctx, 0, LimiteListagemLivros+1), wantErr: ErrListagemInvalida},
+		{name: "ListarLivros com limite muito acima do teto", chamar: listar(ctx, 0, 1<<30), wantErr: ErrListagemInvalida},
+		{name: "ListarLivros com apos negativo", chamar: listar(ctx, -1, 10), wantErr: ErrListagemInvalida},
+		{name: "ListarLivros com apos mínimo int64", chamar: listar(ctx, -1<<63, 10), wantErr: ErrListagemInvalida},
+		{name: "BuscarEmprestimo id zero", chamar: func(r *Repositorio) error {
+			_, err := r.BuscarEmprestimo(ctx, 0)
+			return err
+		}, wantErr: ErrEmprestimoNaoEncontrado},
+		{name: "BuscarEmprestimo id negativo", chamar: func(r *Repositorio) error {
+			_, err := r.BuscarEmprestimo(ctx, -7)
+			return err
+		}, wantErr: ErrEmprestimoNaoEncontrado},
+		{name: "BuscarLivro id zero", chamar: func(r *Repositorio) error {
+			_, err := r.BuscarLivro(ctx, 0)
+			return err
+		}, wantErr: ErrLivroNaoEncontrado},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -367,6 +480,7 @@ func TestRepositorioRecusaAntesDoSQL(t *testing.T) {
 func TestRepositorioErroSemDados(t *testing.T) {
 	ctx := context.Background()
 	falha := errors.New("conexão perdida")
+	pgCancelado := &pgconn.PgError{Severity: "ERROR", Code: "57014", Message: "canceling statement SEGREDO", Detail: "Titulo Secreto Do Acervo"}
 	pgR4 := &pgconn.PgError{Severity: "ERROR", Code: "23505", Message: "duplicate key", ConstraintName: "emprestimo_livro_aberto_uq", Detail: "Key (livro_id)=(424242) already exists."}
 
 	livroE, err := domain.NovoEmprestimo(424242, 515151, time.Date(2026, 3, 10, 10, 0, 0, 0, saoPaulo(t)))
@@ -429,6 +543,13 @@ func TestRepositorioErroSemDados(t *testing.T) {
 			_, err := r.BuscarEmprestimoAbertoPorLivro(ctx, 313373)
 			return err
 		}, proibidos: []string{"313373"}},
+		{name: "BuscarEmprestimo", dbErr: falha, wantIs: falha, chamar: func(r *Repositorio) error {
+			_, err := r.BuscarEmprestimo(ctx, 646464)
+			return err
+		}, proibidos: []string{"646464"}},
+		{name: "ListarLivros", dbErr: falha, wantIs: falha, chamar: listar(ctx, 757575, 37), proibidos: []string{"757575"}},
+		{name: "ListarLivros com PgError", dbErr: pgCancelado, wantIs: pgCancelado, chamar: listar(ctx, 757575, 37),
+			proibidos: []string{"757575", "SEGREDO", "Titulo Secreto Do Acervo"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
