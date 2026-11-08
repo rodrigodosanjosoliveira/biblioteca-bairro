@@ -60,6 +60,9 @@ type repoFake struct {
 	errBuscar         error
 	errRegistrar      error
 	errRenovar        error
+	errBuscarLivro    error
+	errListar         error
+	errBuscarEmpr     error
 
 	// bloquear faz toda chamada esperar o ctx e devolver o erro dele embrulhado.
 	bloquear bool
@@ -76,6 +79,18 @@ type repoFake struct {
 	buscarRecebido    int64
 	registrarRecebido domain.Emprestimo
 	renovarRecebido   domain.Emprestimo
+
+	// Leituras da DEL-013. Sem retorno configurado: BuscarLivro devolve o
+	// livro {id, "Dom Casmurro"}, ListarLivros devolve nil e false e
+	// BuscarEmprestimo devolve buscarRet.
+	livroRet        *domain.Livro
+	listarRet       []domain.Livro
+	listarTemMais   bool
+	buscarEmprRet   *domain.Emprestimo
+	livroIDRecebido int64
+	listarApos      int64
+	listarLimite    int
+	emprIDRecebido  int64
 }
 
 func (r *repoFake) registrar(ctx context.Context, nome string) error {
@@ -194,6 +209,45 @@ func (r *repoFake) RegistrarRenovacao(ctx context.Context, e domain.Emprestimo) 
 		return *r.renovarRet, nil
 	}
 	return e, nil
+}
+
+func (r *repoFake) BuscarLivro(ctx context.Context, id int64) (domain.Livro, error) {
+	if err := r.registrar(ctx, "BuscarLivro"); err != nil {
+		return domain.Livro{}, err
+	}
+	r.livroIDRecebido = id
+	if r.errBuscarLivro != nil {
+		return domain.Livro{}, r.errBuscarLivro
+	}
+	if r.livroRet != nil {
+		return *r.livroRet, nil
+	}
+	return domain.Livro{ID: id, Titulo: "Dom Casmurro"}, nil
+}
+
+func (r *repoFake) ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error) {
+	if err := r.registrar(ctx, "ListarLivros"); err != nil {
+		return nil, false, err
+	}
+	r.listarApos, r.listarLimite = apos, limite
+	if r.errListar != nil {
+		return nil, false, r.errListar
+	}
+	return r.listarRet, r.listarTemMais, nil
+}
+
+func (r *repoFake) BuscarEmprestimo(ctx context.Context, id int64) (domain.Emprestimo, error) {
+	if err := r.registrar(ctx, "BuscarEmprestimo"); err != nil {
+		return domain.Emprestimo{}, err
+	}
+	r.emprIDRecebido = id
+	if r.errBuscarEmpr != nil {
+		return domain.Emprestimo{}, r.errBuscarEmpr
+	}
+	if r.buscarEmprRet != nil {
+		return *r.buscarEmprRet, nil
+	}
+	return r.buscarRet, nil
 }
 
 // pingerFake é o dublê de httpapi.Pinger.
@@ -342,6 +396,9 @@ func rotasProtegidas() []rota {
 		{nome: "POST devolucao", method: http.MethodPost, path: "/livros/1/devolucao"},
 		{nome: "GET emprestimo", method: http.MethodGet, path: "/livros/1/emprestimo"},
 		{nome: "POST renovacao", method: http.MethodPost, path: "/livros/1/renovacao"},
+		{nome: "GET /livros", method: http.MethodGet, path: "/livros"},
+		{nome: "GET /livros/{id}", method: http.MethodGet, path: "/livros/1"},
+		{nome: "GET /emprestimos/{id}", method: http.MethodGet, path: "/emprestimos/1"},
 	}
 }
 

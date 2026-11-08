@@ -50,6 +50,82 @@ func FuzzParseID(f *testing.F) {
 	})
 }
 
+// oraculoListagem é a especificação independente da query de GET /livros:
+// url.ParseQuery sem erro; só as chaves limite e apos, cada uma uma vez;
+// limite = strconv.ParseInt base 10 em 1..100 (padrão 20); apos =
+// strconv.ParseInt base 10 > 0 (padrão 0).
+func oraculoListagem(raw string) (apos int64, limite int, ok bool) {
+	vals, err := url.ParseQuery(raw)
+	if err != nil {
+		return 0, 0, false
+	}
+	limite = 20
+	for k, vs := range vals {
+		if len(vs) != 1 {
+			return 0, 0, false
+		}
+		n, err := strconv.ParseInt(vs[0], 10, 64)
+		switch k {
+		case "limite":
+			if err != nil || n < 1 || n > 100 {
+				return 0, 0, false
+			}
+			limite = int(n)
+		case "apos":
+			if err != nil || n <= 0 {
+				return 0, 0, false
+			}
+			apos = n
+		default:
+			return 0, 0, false
+		}
+	}
+	return apos, limite, true
+}
+
+// FuzzParametrosListagem manda query strings arbitrárias para GET /livros.
+// Aceita chega ao repositório com os valores do oráculo; o resto é 400
+// parametro_invalido sem chamar o repositório. Nunca outro status.
+func FuzzParametrosListagem(f *testing.F) {
+	for _, s := range []string{
+		"", "limite=20", "apos=1", "limite=1&apos=9223372036854775807", "limite=100", "limite=101", "limite=0",
+		"apos=0", "apos=-1", "apos=9223372036854775808", "limite=%2B5", "limite=+5", "limite=007", "limite=%31%30",
+		"x=1", "limite=1&limite=1", "%zz", "limite=5;apos=1", "&", "=", "limite", "apos=", "limite=1e2",
+		"limite=4294967297", "limite=18446744073709551617", "apos=١", "limite=\x00", "a=1&b=2&c=3", "limite=5#frag",
+	} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		fx := novaFixture(t)
+		req := httptest.NewRequest(http.MethodGet, "/livros", nil)
+		req.URL.RawQuery = raw
+		req.Header.Set("Authorization", "Bearer "+tokenTeste)
+		rec := httptest.NewRecorder()
+		fx.handler().ServeHTTP(rec, req)
+
+		apos, limite, ok := oraculoListagem(raw)
+		if ok {
+			if rec.Code != http.StatusOK {
+				t.Fatalf("query %q: status = %d, want 200 (corpo %s)", raw, rec.Code, rec.Body.String())
+			}
+			if fx.repo.nChamadas() != 1 || fx.repo.listarApos != apos || fx.repo.listarLimite != limite {
+				t.Fatalf("query %q: ListarLivros(%d, %d) em %d chamada(s), want (%d, %d) uma vez",
+					raw, fx.repo.listarApos, fx.repo.listarLimite, fx.repo.nChamadas(), apos, limite)
+			}
+			return
+		}
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("query %q: status = %d, want 400 (corpo %s)", raw, rec.Code, rec.Body.String())
+		}
+		if c, m := erroJSON(t, rec.Body.Bytes()); c != "parametro_invalido" || m != "parâmetro de consulta inválido" {
+			t.Fatalf("query %q: erro = %q %q, want parametro_invalido com mensagem fixa", raw, c, m)
+		}
+		if fx.repo.nChamadas() != 0 {
+			t.Fatalf("query %q: repositório chamado", raw)
+		}
+	})
+}
+
 // FuzzDecodificarCorpo manda corpos arbitrários às rotas com corpo. Sem
 // panic; erro só como 400, 413 ou 422, com o código coerente; JSON inválido
 // nunca passa; na devolução, qualquer byte é 400.

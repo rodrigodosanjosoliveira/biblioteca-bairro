@@ -32,6 +32,9 @@ const (
 	codLimiteRenovacoes     = "limite_renovacoes_atingido"
 	codIndisponivel         = "indisponivel"
 	codErroInterno          = "erro_interno"
+
+	codParametroInvalido       = "parametro_invalido"
+	codEmprestimoNaoEncontrado = "emprestimo_nao_encontrado"
 )
 
 // Valores de "causa" no log de um 500.
@@ -68,6 +71,9 @@ var catalogo = map[string]erroAPI{
 	codLimiteRenovacoes:     {http.StatusConflict, "limite de renovações atingido"},
 	codIndisponivel:         {http.StatusServiceUnavailable, "serviço indisponível"},
 	codErroInterno:          {http.StatusInternalServerError, "erro interno"},
+
+	codParametroInvalido:       {http.StatusBadRequest, "parâmetro de consulta inválido"},
+	codEmprestimoNaoEncontrado: {http.StatusNotFound, "empréstimo não encontrado"},
 }
 
 // falhar responde o código com o status e a mensagem do catálogo. Código fora
@@ -122,6 +128,7 @@ func classificar(err error) (string, []slog.Attr) {
 // repositório de forma errada (ou se o relógio devolver zero).
 var errosDeBug = []error{
 	storage.ErrJaPersistido,
+	storage.ErrListagemInvalida,
 	domain.ErrEmprestimoInvalido,
 	domain.ErrReferenciaZero,
 	domain.ErrLivroIDInvalido,

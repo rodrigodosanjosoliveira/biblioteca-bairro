@@ -24,4 +24,5 @@ Status: draft, em revisão, merged, revertida.
 | DEL-009 | Atualizar o pipeline-claude de v1.0.0-rc.4 para v1.0.0-rc.5 | merged | 2026-11-04 |
 | DEL-010 | Atualizar o pipeline-claude de v1.0.0-rc.5 para v1.0.0 | merged | 2026-11-05 |
 | DEL-011 | Renovação de empréstimo por mais 14 dias, no máximo 2 vezes | merged | 2026-11-06 |
-| DEL-012 | Dockerfile e README de execução da API biblioteca-bairro | em revisão | 2026-11-06 |
+| DEL-012 | Dockerfile e README de execução da API biblioteca-bairro | merged | 2026-11-06 |
+| DEL-013 | Leituras da API: GET /livros paginado, GET /livros/{id} e GET /emprestimos/{id} | em revisão | 2026-11-07 |
