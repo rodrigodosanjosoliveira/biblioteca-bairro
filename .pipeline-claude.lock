@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "toolkit_version": "v1.1.0-rc.1",
+  "toolkit_version": "v1.1.0",
   "files": {
     ".claude/agents/architecture-guardrails.md": "ca2ec74931e49125a16f832a37ea15bfe6064647be69fb60d4524ebb9bb18a71",
     ".claude/agents/code-reviewer.md": "fd043a812e60ad9b66d00c63c74e2d27eb27e2eb50d45ff3f64230381d017387",
     ".claude/agents/data-model.md": "6d5435d632f629ade2e03d6e23bb3b76ede6a9863c61d41f389e65003a1854bd",
-    ".claude/agents/dev-implementation.md": "e59b00b4c68ced4489ce87f0d6fade0b950f46a3b2ce75d9226dae71d0b54d66",
+    ".claude/agents/dev-implementation.md": "7fd93520c5909e610b04cadf81bfc2cead12d7338f4f8b3bcceb2c9f647d1033",
     ".claude/agents/docs-update.md": "d2d9213ebeb99d139d4152e2bf69cf0993a56ee081b84caeafc1082315efa431",
     ".claude/agents/git-delivery.md": "7b8c27741838020ae1a2aa7f5d9fcc6164f1cd4fb2deed7d20a5f68c9bad27c6",
     ".claude/agents/migration-reviewer.md": "b12835538d5a0555cd460c00b89e9e4122628f9d723965fe11ec4049d948b431",
@@ -13,7 +13,7 @@
     ".claude/agents/qa-validation.md": "440c4f6bae6003dfad7dc171012c2cb544a40d85ab8c8b796f1cb108894628d3",
     ".claude/agents/security-review.md": "a703049568e7e184a82fb12599fdd383189fc2645856da64e5ac742fc16f039c",
     ".claude/agents/supply-chain-review.md": "aeee05bba401f39299aecc5eb6675947501d09593176a78d0d876854a7e1b2d3",
-    ".claude/agents/test-writer.md": "c4a7936bc5271d2b882870744c50ec72876ed3eeb288477267e9b231e9dc6b16",
+    ".claude/agents/test-writer.md": "256c69de4fd346b79e58f1f2ed732957911ba61bc338b4fcccd4d88615ece57e",
     ".claude/skills/fluxo/SKILL.md": "2b0795376a1055db3725e3c93ec60ecd210a1137cead4d887c20f934662ae95b",
     ".claude/skills/nova-delivery/SKILL.md": "44aeb49ee414775e23b88499c6226c9a42a69fca257227cdc56eaa9502c2e813",
     ".claude/skills/validar/SKILL.md": "f462fdf090b9b34525dd92ffad21375238341bf484ac8ef42b48da40e51274b2",
