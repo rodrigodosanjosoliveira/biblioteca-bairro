@@ -617,3 +617,47 @@ renova qualquer empréstimo) e notificações ficam fora até decisão nova. Os
 testes de banco de `internal/migrate` exigem PostgreSQL com acesso `trust`
 (`TestControleAdotadoDeOutroDono` falha com `scram`), como já ocorre no CI
 (D-13).
+
+## D-18 — Imagem de container: builder na Go stable por digest, `go.mod` como mínimo
+
+Decisão do humano (B1 = b, B2 = a) e do `architecture-guardrails` na DEL-012.
+Complementa a D-13 (`go.mod` declara a versão mínima; o CI usa a stable) e a
+D-16 (sem migração no boot).
+
+**Imagens base.** O `Dockerfile` é multi-stage. O builder usa a imagem oficial
+`golang` na versão stable do momento da delivery, com patch exato na tag e
+fixada pelo digest do índice multi-arch (na DEL-012:
+`golang:1.27.3-trixie@sha256:af1bfc26...ea80`). O runtime usa
+`gcr.io/distroless/static-debian13:nonroot`, também por digest de índice
+(`sha256:25ac8f0c...8329`). Tag flutuante, tag sem patch e digest de uma só
+plataforma não são aceitos. Digest só entra se tiver sido obtido e conferido
+por comando (`docker buildx imagetools inspect` por tag e por digest e
+`docker pull` por digest), com a evidência no report da delivery.
+
+**`go.mod` não muda.** A diretiva `go 1.25.0` continua sendo o mínimo, sem
+linha `toolchain`. O builder fica na stable para usar o mesmo toolchain dos
+testes e do `govulncheck` do CI. `GOTOOLCHAIN=local` impede o build de baixar
+outro toolchain.
+
+**Build e execução.** `CGO_ENABLED=0`, `-trimpath`, `-buildvcs=false`,
+`GOFLAGS=-mod=readonly`, `go mod download && go mod verify`, sem `-ldflags
+"-s -w"` (mantém os símbolos para `govulncheck -mode=binary`). A tag
+`timetzdata` é redundante: a garantia de fuso é o import `time/tzdata` em
+`internal/domain/multa.go` e `internal/storage/repositorio.go`, que não pode
+sair. `USER 65532:65532`, `EXPOSE 8080`, `ENTRYPOINT ["/biblioteca-bairro"]`
+em forma exec, sem `CMD`, sem `HEALTHCHECK` e sem `ENV`/`ARG` de segredo. O
+`.dockerignore` é allowlist (`go.mod`, `go.sum`, `cmd/`, `internal/`,
+`migrations/`).
+
+**Atualização.** Os digests são atualizados por delivery: não há
+Dependabot/Renovate para imagens nem build da imagem no CI.
+
+**Motivo:** reprodutibilidade (digest imutável), binário compilado com o mesmo
+toolchain testado e escaneado no CI, e a 1.25 já fora da janela de suporte do
+Go.
+
+**Consequências:** quem compila localmente com o mínimo do `go.mod` obtém um
+binário diferente do da imagem. Correção de CVE na base ou no toolchain só
+entra com nova delivery. A assinatura cosign da distroless não foi verificada
+na DEL-012 (cosign ausente na máquina). `Dockerfile` e `.dockerignore` estão
+fora de `security_surface_paths` (sugestão ao humano, fora da sessão).

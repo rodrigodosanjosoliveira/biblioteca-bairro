@@ -23,4 +23,5 @@ Status: draft, em revisão, merged, revertida.
 | DEL-008 | Executor de migração em produção | merged | 2026-10-30 |
 | DEL-009 | Atualizar o pipeline-claude de v1.0.0-rc.4 para v1.0.0-rc.5 | merged | 2026-11-04 |
 | DEL-010 | Atualizar o pipeline-claude de v1.0.0-rc.5 para v1.0.0 | merged | 2026-11-05 |
-| DEL-011 | Renovação de empréstimo por mais 14 dias, no máximo 2 vezes | em revisão | 2026-11-06 |
+| DEL-011 | Renovação de empréstimo por mais 14 dias, no máximo 2 vezes | merged | 2026-11-06 |
+| DEL-012 | Dockerfile e README de execução da API biblioteca-bairro | em revisão | 2026-11-06 |

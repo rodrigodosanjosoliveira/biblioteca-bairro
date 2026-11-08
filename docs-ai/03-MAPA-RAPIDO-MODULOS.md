@@ -23,6 +23,8 @@
 │   └── controle/           # SQL da tabela de controle `migracao_aplicada`
 ├── docs-ai/                # decisões, invariantes, runbook de migração, contrato de handoff e deliveries
 ├── Makefile                # gates e instalação do pipeline-claude
+├── Dockerfile              # imagem multi-stage: builder golang stable e runtime distroless nonroot, por digest (D-18)
+├── .dockerignore           # allowlist do contexto de build: go.mod, go.sum, cmd/, internal/, migrations/
 ├── .pipeline-claude.json   # governança: caminhos protegidos, editores, módulos, sensores
 ├── .claude/                # subagentes, skills e settings do Claude Code
 └── .mcp.json               # servidor MCP do pipeline-claude
@@ -82,6 +84,11 @@ a necessidade e mantenha este mapa em dia.
 - `.github/workflows/`: `SECURITY: sim` (serviço Postgres de teste no job
   `gates`, D-13).
 - `go.mod` / `go.sum`: `SUPPLY_CHAIN: sim` e `SECURITY: sim`.
+- `Dockerfile` e `.dockerignore`: `SECURITY: sim` (usuário não root, segredos
+  fora das camadas, PID 1 e sinais) e `SUPPLY_CHAIN: sim` quando uma imagem base
+  ou digest mudar (D-18). **Não estão em `security_surface_paths`**: o triage
+  liga `require_security` à mão até o humano acrescentá-los em
+  `.pipeline-claude.json`, fora da sessão (B-S3 da DEL-012).
 - `cmd/`: ciclo de vida do servidor, sinais e desligamento gracioso; subcomando
   `migrate up|status` (D-16).
 

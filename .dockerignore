@@ -1,0 +1,7 @@
+# Allowlist: só o necessário para compilar o binário entra no contexto.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!migrations/
