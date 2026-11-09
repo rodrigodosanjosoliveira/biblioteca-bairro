@@ -47,6 +47,9 @@ type Repositorio interface {
 	BuscarLivro(ctx context.Context, id int64) (domain.Livro, error)
 	ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error)
 	BuscarEmprestimo(ctx context.Context, id int64) (domain.Emprestimo, error)
+	BuscarUsuario(ctx context.Context, id int64) (domain.Usuario, error)
+	ListarUsuarios(ctx context.Context, apos int64, limite int) ([]domain.Usuario, bool, error)
+	ListarEmprestimos(ctx context.Context, apos int64, limite int) ([]domain.Emprestimo, bool, error)
 }
 
 // Pinger verifica a disponibilidade do banco. *pgxpool.Pool o satisfaz.
@@ -140,6 +143,9 @@ func NovoHandler(d Dependencias) http.Handler {
 	mux.Handle("GET /livros", auth(http.HandlerFunc(a.listarLivros)))
 	mux.Handle("GET /livros/{id}", auth(http.HandlerFunc(a.obterLivro)))
 	mux.Handle("GET /emprestimos/{id}", auth(http.HandlerFunc(a.obterEmprestimo)))
+	mux.Handle("GET /usuarios", auth(http.HandlerFunc(a.listarUsuarios)))
+	mux.Handle("GET /usuarios/{id}", auth(http.HandlerFunc(a.obterUsuario)))
+	mux.Handle("GET /emprestimos", auth(http.HandlerFunc(a.listarEmprestimos)))
 
 	return middleware.RequestID(
 		middleware.Log(d.Logger)(
@@ -225,6 +231,20 @@ type saidaUsuario struct {
 type saidaListaLivros struct {
 	Itens   []saidaLivro `json:"itens"`
 	Proximo *int64       `json:"proximo"`
+}
+
+// saidaListaUsuarios é uma página de GET /usuarios, no contrato de
+// saidaListaLivros.
+type saidaListaUsuarios struct {
+	Itens   []saidaUsuario `json:"itens"`
+	Proximo *int64         `json:"proximo"`
+}
+
+// saidaListaEmprestimos é uma página de GET /emprestimos, no contrato de
+// saidaListaLivros.
+type saidaListaEmprestimos struct {
+	Itens   []saidaEmprestimo `json:"itens"`
+	Proximo *int64            `json:"proximo"`
 }
 
 // saidaEmprestimo é o DTO de empréstimo. Instantes em RFC 3339 UTC, o
@@ -358,6 +378,85 @@ func (a *api) listarLivros(w http.ResponseWriter, r *http.Request) {
 	responder(w, http.StatusOK, out)
 }
 
+func (a *api) listarUsuarios(w http.ResponseWriter, r *http.Request) {
+	apos, limite, ok := lerParametrosListagem(r.URL.RawQuery)
+	if !ok {
+		falhar(w, r, codParametroInvalido)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	usuarios, temMais, err := a.repo.ListarUsuarios(ctx, apos, limite)
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	out := saidaListaUsuarios{Itens: make([]saidaUsuario, 0, len(usuarios))}
+	for _, u := range usuarios {
+		out.Itens = append(out.Itens, saidaUsuario{ID: u.ID, Nome: u.Nome})
+	}
+	if temMais && len(usuarios) > 0 {
+		p := usuarios[len(usuarios)-1].ID
+		out.Proximo = &p
+	}
+	responder(w, http.StatusOK, out)
+}
+
+func (a *api) obterUsuario(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(r.PathValue("id"))
+	if !ok {
+		falhar(w, r, codIDInvalido)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	got, err := a.repo.BuscarUsuario(ctx, id)
+	if errors.Is(err, storage.ErrUsuarioNaoEncontrado) {
+		// Mapeamento local: nas rotas de empréstimo o mesmo erro é
+		// usuario_nao_encontrado (422) e continua assim em classificar.
+		falhar(w, r, codUsuarioInexistente)
+		return
+	}
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	responder(w, http.StatusOK, saidaUsuario{ID: got.ID, Nome: got.Nome})
+}
+
+// listarEmprestimos lê o relógio uma única vez, antes do repositório, e
+// calcula a multa de todos os itens com esse instante. Erro em qualquer item
+// responde 500 sem página parcial.
+func (a *api) listarEmprestimos(w http.ResponseWriter, r *http.Request) {
+	apos, limite, ok := lerParametrosListagem(r.URL.RawQuery)
+	if !ok {
+		falhar(w, r, codParametroInvalido)
+		return
+	}
+	agora := a.agora()
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	emprestimos, temMais, err := a.repo.ListarEmprestimos(ctx, apos, limite)
+	if err != nil {
+		falharErro(w, r, err)
+		return
+	}
+	out := saidaListaEmprestimos{Itens: make([]saidaEmprestimo, 0, len(emprestimos))}
+	for _, e := range emprestimos {
+		item, err := montarSaidaEmprestimo(e, agora)
+		if err != nil {
+			falharErro(w, r, err)
+			return
+		}
+		out.Itens = append(out.Itens, item)
+	}
+	if temMais && len(emprestimos) > 0 {
+		p := emprestimos[len(emprestimos)-1].ID()
+		out.Proximo = &p
+	}
+	responder(w, http.StatusOK, out)
+}
+
 func (a *api) obterLivro(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(r.PathValue("id"))
 	if !ok {
@@ -460,10 +559,20 @@ func (a *api) renovar(w http.ResponseWriter, r *http.Request) {
 // responderEmprestimo calcula a multa com ref = agora (ignorada se o
 // empréstimo já foi devolvido) e escreve o DTO.
 func responderEmprestimo(w http.ResponseWriter, r *http.Request, status int, e domain.Emprestimo, agora time.Time) {
-	multa, err := e.Multa(agora)
+	out, err := montarSaidaEmprestimo(e, agora)
 	if err != nil {
 		falharErro(w, r, err)
 		return
+	}
+	responder(w, status, out)
+}
+
+// montarSaidaEmprestimo monta o DTO de e com a multa calculada em ref = agora
+// (ignorada se o empréstimo já foi devolvido).
+func montarSaidaEmprestimo(e domain.Emprestimo, agora time.Time) (saidaEmprestimo, error) {
+	multa, err := e.Multa(agora)
+	if err != nil {
+		return saidaEmprestimo{}, err
 	}
 	out := saidaEmprestimo{
 		ID:         e.ID(),
@@ -478,7 +587,7 @@ func responderEmprestimo(w http.ResponseWriter, r *http.Request, status int, e d
 		d := e.Devolucao().UTC().Format(time.RFC3339)
 		out.Devolucao = &d
 	}
-	responder(w, status, out)
+	return out, nil
 }
 
 // responder escreve v em JSON com status.
@@ -495,12 +604,14 @@ func parseID(s string) (int64, bool) {
 	return n, err == nil && n > 0
 }
 
-// limitePadraoListagem é o limite de GET /livros sem o parâmetro limite.
+// limitePadraoListagem é o limite das listagens (GET /livros, /usuarios e
+// /emprestimos) sem o parâmetro limite.
 const limitePadraoListagem = 20
 
-// lerParametrosListagem valida a query de GET /livros: só as chaves limite e
-// apos, cada uma no máximo uma vez. limite é inteiro decimal em
-// 1..storage.LimiteListagemLivros (padrão 20); apos segue a gramática de
+// lerParametrosListagem valida a query das listagens (GET /livros, /usuarios
+// e /emprestimos): só as chaves limite e apos, cada uma no máximo uma vez.
+// limite é inteiro decimal em 1..storage.LimiteListagem (padrão 20); apos
+// segue a gramática de
 // parseID (padrão 0, início). Qualquer desvio devolve ok = false.
 func lerParametrosListagem(rawQuery string) (apos int64, limite int, ok bool) {
 	vals, err := url.ParseQuery(rawQuery)
@@ -515,7 +626,7 @@ func lerParametrosListagem(rawQuery string) (apos int64, limite int, ok bool) {
 		switch k {
 		case "limite":
 			n, err := strconv.ParseInt(vs[0], 10, 64)
-			if err != nil || n < 1 || n > storage.LimiteListagemLivros {
+			if err != nil || n < 1 || n > storage.LimiteListagem {
 				return 0, 0, false
 			}
 			limite = int(n)

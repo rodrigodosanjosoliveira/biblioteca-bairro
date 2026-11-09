@@ -1,0 +1,55 @@
+---
+delivery_id: DEL-014
+status: em revisão
+data: 2026-11-07
+require_security: true
+require_release_ops: false
+---
+
+# DEL-014 — Listagens paginadas de usuários e de empréstimos e detalhe de usuário por id
+
+<!--
+Preencha cada campo no lugar de <preencher> e marque o checklist só com
+evidência dos handoffs. Com require_security: true, acrescente a seção
+Security (título de nível 2) com o campo "- Resultado:". Com
+require_release_ops: true, acrescente a seção Release/Ops com o campo
+"- Plano de rollback:". O validador reprova placeholder, item de checklist
+aberto e marcadores de pendência em caixa alta.
+-->
+
+## PM/Triage
+- Escopo fechado: GET /usuarios e GET /emprestimos por cursor no contrato da D-19 e GET /usuarios/{id} (404 usuario_nao_encontrado), sem migração; mais a marcação merged da DEL-013 no INDEX.md e no report; fora: filtros (aberto, devolvido, vencido, por usuário ou livro), GET /usuarios/{id}/emprestimos, busca por nome, ordenação configurável, total, índice ou migração nova, autorização por recurso, mudança em rotas e códigos existentes (o 404 do detalhe foi revisado no handoff 02 para o código novo usuario_inexistente, porque usuario_nao_encontrado já é 422)
+- Criterios de aceite: GET /usuarios e GET /emprestimos com o contrato da D-19 sem variação (limite 1..100, padrão 20, 400 sem clamp; apos pela gramática do parseID; ordem por id; {itens, proximo} com proximo = id do último item entregue; chave desconhecida, repetida, escape inválido ou ; → 400 parametro_invalido); GET /usuarios/{id} com DTO {id, nome}, ignorando a query, 404 usuario_inexistente; item de empréstimo igual ao GET /emprestimos/{id}, com um único instante de referência por requisição e 500 da página inteira em erro de item; as três rotas atrás de auth, com timeout por operação e log sem nome, limite, apos, URL ou query; storage revalida apos/limite antes do SQL (ErrListagemInvalida → 500 bug_interno); testes de GET /livros passam sem edição; sem migração (U1)
+- Riscos: MEDIO aceito (U2) de exposição em lote de nomes e do histórico de empréstimos com o token único, que vira bloqueio se surgirem vários tokens ou login de usuário final; BAIXO página de usuários de até ~6 MB; BAIXO empréstimo inconsistente no banco dá 500 permanente na página que o contém; off-by-one e ordem do cursor só pegos com PostgreSQL real (BIBLIOTECA_TEST_DB_OBRIGATORIO=1); refatoração de ListarLivros e responderEmprestimo coberta pelos testes existentes sem edição
+
+## Architecture/Guardrails
+- Invariantes aplicaveis: contrato de paginação da D-19 sem variação; teto e validação num só lugar (constante única storage.LimiteListagem, LimiteListagemLivros = LimiteListagem, helper não exportado listarPorID); classificar() e usuario_nao_encontrado 422 intactos, 404 usuario_inexistente mapeado só em obterUsuario; relógio injetado lido uma vez por requisição, antes do SQL (D-14, D-15); nada de OFFSET, COUNT, JOIN, consulta por item, CollectRows/ForEachRow nem r.URL.Query(); log sem nome nem query (D-12, D-15); sem migração e sem dependência nova (go.mod/go.sum intocados); testes com a stdlib testing, em tabela
+- Arquivos provaveis de impacto: internal/storage/repositorio.go, internal/http/handler.go, internal/http/erros.go, testes em internal/http/ e internal/storage/, docs-ai/DECISOES.md, docs-ai/03-MAPA-RAPIDO-MODULOS.md, docs-ai/deliveries/DEL-014/report.md
+
+## Dev
+- Arquivos alterados: internal/storage/repositorio.go (LimiteListagem, listarPorID, ListarLivros delegando, ListarUsuarios, ListarEmprestimos); internal/http/handler.go (interface Repositorio com BuscarUsuario, ListarUsuarios e ListarEmprestimos; rotas GET /usuarios, GET /usuarios/{id} e GET /emprestimos; listarUsuarios, obterUsuario, listarEmprestimos, saidaListaUsuarios, saidaListaEmprestimos, montarSaidaEmprestimo); internal/http/erros.go (usuario_inexistente 404 no catálogo); testes listados abaixo; docs-ai/DECISOES.md, docs-ai/03-MAPA-RAPIDO-MODULOS.md; marcação merged da DEL-013 em docs-ai/deliveries/INDEX.md e docs-ai/deliveries/DEL-013/report.md
+- Resumo tecnico: helper genérico listarPorID recusa apos < 0 e limite fora de 1..LimiteListagem com ErrListagemInvalida antes do SQL, consulta com (apos, limite+1), sai do laço em len == limite sem escanear a linha extra, devolve slice não nil e erro sem página parcial; ListarLivros delega a ele com o mesmo SQL e assinatura; ListarUsuarios e ListarEmprestimos são keyset pela PK, e os empréstimos são reidratados com lerEmprestimo. No HTTP, listarEmprestimos lê a query, captura agora := a.agora() uma vez, consulta e monta todos os itens com montarSaidaEmprestimo (extraída de responderEmprestimo sem mudança de comportamento) antes de responder; obterUsuario mapeia storage.ErrUsuarioNaoEncontrado para usuario_inexistente 404 com errors.Is
+- Testes criados/ajustados: novos internal/http/listagem_usuarios_emprestimos_test.go (parâmetros, contrato, instante único, item inválido, mapa de erros, detalhe, auth antes de tudo, log, FuzzParametrosListagemNovasRotas), internal/http/banco_listagem_usuarios_emprestimos_test.go (com banco), internal/http/erros_usuario_interno_test.go, internal/storage/listagem_sem_banco_usuarios_emprestimos_test.go e internal/storage/listagem_usuarios_emprestimos_test.go (com banco); ajustados internal/http/apoio_test.go (repoFake com os três métodos e rotasProtegidas com as três rotas) e internal/http/handler_test.go (só o caso :722, GET /emprestimos → 404, substituído por barras finais 404 e métodos 405, exceção prevista no handoff 02); nenhum teste de GET /livros editado; test-writer: 34 mutantes mortos, 0 sobreviventes
+- Evidencias (codigo/teste): handoff 04, sensores sem banco ok (vet, build, test 2094 pass/0 fail/216 skip de banco, vuln "No vulnerabilities found.", mod_verify "all modules verified"); suíte com PostgreSQL real e BIBLIOTECA_TEST_DB_OBRIGATORIO=1, `go test -count=1 -v ./...` exit 0 com 2553 PASS, 0 FAIL, 0 SKIP nos 8 pacotes; fuzz `go test -run '^$' -fuzz=FuzzParametrosListagemNovasRotas -fuzztime=30s ./internal/http/` PASS com 529349 execs
+
+## Code Review
+- Resultado: aprovado sem bloqueios (handoff 05); diff inteiro lido contra origin/main (merge-base fb135d2), com a refatoração de ListarLivros e a extração de montarSaidaEmprestimo conferidas sem mudança de comportamento, SQL keyset pela PK, parametrizado e sem OFFSET/COUNT/JOIN/N+1, e o NAO_FAZER do handoff 02 cumprido
+- Bloqueios e sugestões: nenhum bloqueio. Duas sugestões cosméticas, NÃO implementadas nesta entrega por decisão do fluxo (sem efeito em comportamento): (1) internal/storage/repositorio.go:127, o comentário de ListarLivros ainda cita 1..LimiteListagemLivros em vez de LimiteListagem (mesmo valor, 100); (2) internal/http/handler.go:613-615, a quebra de linha do comentário de lerParametrosListagem ficou irregular e pode ser refluída
+
+## QA
+- Resultado: ok (handoff 07). Sensores rodados pelo QA em 2026-11-08 com ok=true (vet, build, test 2094 pass/0 fail/216 skip, todos os skips de banco por falta de BIBLIOTECA_TEST_DATABASE_URL, vuln limpo, mod_verify ok). A camada de banco foi provada pela execução da SESSÃO PRINCIPAL, não pelo QA: 2026-11-08T23:55:40Z, Postgres 16 descartável com o digest do CI, BIBLIOTECA_TEST_DB_OBRIGATORIO=1, `go test -count=1 -p 1 -json ./...`, exit 0, 2553 pass, 0 fail, 0 skip, 8 pacotes; o QA conferiu o JSON por Grep (0 skip, 0 fail, os 8 pacotes e os testes de banco desta delivery com pass). Ressalva do QA sobre o critério: ele classificou ok, e não parcial, porque a camada de banco foi provada nessa execução; se o critério exigir execução própria do QA com banco, o resultado passa a ser parcial pelo motivo "sensor test sem BIBLIOTECA_TEST_DATABASE_URL". O fuzz é evidência do handoff 04, não repetido pelo QA
+- Cenarios executados: GET /usuarios e GET /emprestimos com parâmetros (inclui situacao/usuario_id/livro_id → 400), contrato, proximo = último item, itens sempre array, página exata com proximo null, apos além do último, tabelas vazias, buraco nos ids e heap fora de ordem, percorrer com limites 1..6 e 100 com banco; GET /usuarios/{id} 200, 404 usuario_inexistente, id inválido, query ignorada e 422 usuario_nao_encontrado preservado nas rotas de empréstimo; GET /emprestimos com instante único, item DeepEqual ao GET /emprestimos/{id}, linha corrompida (500 na página, 200 como linha extra e depois do apos); auth antes de tudo, timeout, log sem nome nem query; 405 e 404 de barra final nas rotas novas; regressão TestBancoListagemLivros pass; sem scope creep (19 arquivos em internal/http, internal/storage e docs-ai/deliveries; filtros U1 não implementados)
+
+## Docs
+- Docs atualizados: docs-ai/DECISOES.md (D-20 nova, com rotas, contrato de paginação da D-19, LimiteListagem compartilhada, código usuario_inexistente 404 só no detalhe, decisões U1 e U2, risco MEDIO com a condição de bloqueio e os riscos BAIXO; Consequências da D-15 e da D-19 atualizadas sobre as listagens pendentes); docs-ai/03-MAPA-RAPIDO-MODULOS.md (linhas da DEL-014 para internal/storage e internal/http); docs-ai/deliveries/INDEX.md (DEL-014 em revisão; DEL-013 merged, marcação mantida). D-20 escolhida como decisão nova em vez de extensão da D-19 porque traz decisões do usuário, código de erro novo e risco de dado pessoal próprios; a D-19 segue como fonte do contrato. CLAUDE.md sem mudança (nem estrutura nem invariante mudaram); comentários de símbolos exportados já atualizados pelo dev, salvo as duas sugestões cosméticas não implementadas
+
+## Final Checklist
+- [x] `bin/pipeline-claude sensors` verde (todos os sensores do .pipeline-claude.json)
+- [x] Escopo coberto por teste
+- [x] Nada do fora de escopo foi implementado
+- [x] Revisões exigidas pelos sinais concluídas
+- [x] Documentação dos módulos tocados atualizada
+- [x] Delivery registrada no INDEX.md
+
+## Security
+- Resultado: aprovado (handoff 06), sem achado CRITICO ou ALTO; govulncheck via pipeline_sensors "No vulnerabilities found."; as três rotas atrás de auth (SHA-256 + ConstantTimeCompare, Cache-Control: no-store), entrada validada antes do repositório, SQL literal parametrizado, erros só do catálogo com mensagem fixa, log sem nome, URL nem query, nenhum segredo no diff, go.mod/go.sum fora do diff. Achados: [MEDIO, aceito pelo usuário em U2] exposição em lote de dado pessoal: com o token, GET /usuarios percorre todos os nomes e GET /emprestimos todo o histórico, cruzáveis por usuario_id, e um token vazado vale extração completa em cerca de N/100 requisições, sem rate limit; condição de bloqueio futura: com vários tokens ou login de usuário final, GET /usuarios, GET /usuarios/{id} e GET /emprestimos exigem autorização por recurso antes (registrado na D-20). [BAIXO] página de usuários de até ~6 MB (nome sem teto além do corpo de 64 KiB), mesmo risco aceito na D-19. [BAIXO] linha de emprestimo inconsistente dá 500 permanente na página que a contém, fail-closed, sem vazamento, contornável com apos. [BAIXO, informativo] 404 usuario_inexistente contra 200 confirma a existência de um id, sem exposição nova frente à listagem autenticada. Sugestão de delivery futura: rate limit

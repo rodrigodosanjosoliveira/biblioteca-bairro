@@ -91,6 +91,22 @@ type repoFake struct {
 	listarApos      int64
 	listarLimite    int
 	emprIDRecebido  int64
+
+	// Leituras da DEL-014. Sem retorno configurado: BuscarUsuario devolve o
+	// usuário {id, "Capitu"}; ListarUsuarios e ListarEmprestimos devolvem nil
+	// e false. As listagens gravam apos e limite em listarApos e
+	// listarLimite. aoListarEmpr, se não nil, roda no início de
+	// ListarEmprestimos (depois do registro da chamada).
+	errBuscarUsuario      error
+	errListarUsuarios     error
+	errListarEmpr         error
+	usuarioRet            *domain.Usuario
+	usuarioIDRecebido     int64
+	listarUsuariosRet     []domain.Usuario
+	listarUsuariosTemMais bool
+	listarEmprRet         []domain.Emprestimo
+	listarEmprTemMais     bool
+	aoListarEmpr          func()
 }
 
 func (r *repoFake) registrar(ctx context.Context, nome string) error {
@@ -250,6 +266,45 @@ func (r *repoFake) BuscarEmprestimo(ctx context.Context, id int64) (domain.Empre
 	return r.buscarRet, nil
 }
 
+func (r *repoFake) BuscarUsuario(ctx context.Context, id int64) (domain.Usuario, error) {
+	if err := r.registrar(ctx, "BuscarUsuario"); err != nil {
+		return domain.Usuario{}, err
+	}
+	r.usuarioIDRecebido = id
+	if r.errBuscarUsuario != nil {
+		return domain.Usuario{}, r.errBuscarUsuario
+	}
+	if r.usuarioRet != nil {
+		return *r.usuarioRet, nil
+	}
+	return domain.Usuario{ID: id, Nome: "Capitu"}, nil
+}
+
+func (r *repoFake) ListarUsuarios(ctx context.Context, apos int64, limite int) ([]domain.Usuario, bool, error) {
+	if err := r.registrar(ctx, "ListarUsuarios"); err != nil {
+		return nil, false, err
+	}
+	r.listarApos, r.listarLimite = apos, limite
+	if r.errListarUsuarios != nil {
+		return nil, false, r.errListarUsuarios
+	}
+	return r.listarUsuariosRet, r.listarUsuariosTemMais, nil
+}
+
+func (r *repoFake) ListarEmprestimos(ctx context.Context, apos int64, limite int) ([]domain.Emprestimo, bool, error) {
+	if err := r.registrar(ctx, "ListarEmprestimos"); err != nil {
+		return nil, false, err
+	}
+	if r.aoListarEmpr != nil {
+		r.aoListarEmpr()
+	}
+	r.listarApos, r.listarLimite = apos, limite
+	if r.errListarEmpr != nil {
+		return nil, false, r.errListarEmpr
+	}
+	return r.listarEmprRet, r.listarEmprTemMais, nil
+}
+
 // pingerFake é o dublê de httpapi.Pinger.
 type pingerFake struct {
 	mu      sync.Mutex
@@ -399,6 +454,9 @@ func rotasProtegidas() []rota {
 		{nome: "GET /livros", method: http.MethodGet, path: "/livros"},
 		{nome: "GET /livros/{id}", method: http.MethodGet, path: "/livros/1"},
 		{nome: "GET /emprestimos/{id}", method: http.MethodGet, path: "/emprestimos/1"},
+		{nome: "GET /usuarios", method: http.MethodGet, path: "/usuarios"},
+		{nome: "GET /usuarios/{id}", method: http.MethodGet, path: "/usuarios/1"},
+		{nome: "GET /emprestimos", method: http.MethodGet, path: "/emprestimos"},
 	}
 }
 
