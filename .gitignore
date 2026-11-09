@@ -21,6 +21,8 @@ secrets/
 *.pem
 *.key
 credentials
+# Cópia local do environment do Postman, com o token preenchido
+postman/*.local.postman_environment.json
 
 # Configuração pessoal do Claude Code (não versionada)
 .claude/settings.local.json

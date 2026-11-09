@@ -1024,3 +1024,33 @@ total, busca, filtro por datas, coluna de situação persistida e a remoção do
 índices simples ficam para deliveries futuras. A regra de vencido, o EXPLAIN e
 o up/down da 0003 só são exercitados com banco: o CI precisa continuar com
 PostgreSQL e `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`.
+
+## D-22 — Coleção Postman versionada em `postman/`, com environment modelo sem token
+
+Decisões do `pm-triage` e do usuário (P1 a P4) na DEL-016. Nenhum código Go,
+rota, contrato JSON ou autenticação muda.
+
+- Formato Postman Collection v2.1.0. Arquivos em `postman/` na raiz (P1):
+  `biblioteca-bairro.postman_collection.json` e
+  `biblioteca-bairro.postman_environment.json`.
+- Autenticação Bearer `{{token}}` no nível da coleção; `/healthz` e `/readyz`
+  com `noauth`.
+- O environment versionado é só modelo: `base_url` `http://localhost:8080`,
+  `token` vazio e do tipo secret, ids e cursores vazios. O token vai numa cópia
+  `postman/*.local.postman_environment.json`, ignorada pelo `.gitignore` (P2).
+- Scripts de pós-resposta mínimos, sem asserções: gravam `livro_id`,
+  `usuario_id` e `emprestimo_id` nos 201 e o cursor `proximo` das listagens nos
+  200, apagando o cursor quando `proximo` é null (P3).
+- Sem exemplos de resposta salvos (P4).
+- Parâmetros de query opcionais desligados por padrão: a API responde 400
+  `parametro_invalido` a chave desconhecida, repetida ou com valor vazio
+  (D-19, D-21).
+
+**Motivo:** dar um ponto de partida para usar a API à mão sem versionar
+segredo (invariante 5) e sem virar uma segunda suíte de testes.
+
+**Consequências:** a coleção é cópia manual das rotas de
+`internal/http/handler.go`: rota ou campo novo exige atualizá-la na mesma
+delivery. Ela não roda no CI (Newman fica fora). O `.gitignore` só protege a
+cópia com o nome `.local`; token gravado no arquivo versionado continua sendo
+barrado só pela revisão.
