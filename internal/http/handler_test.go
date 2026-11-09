@@ -722,7 +722,14 @@ func TestMuxNotFoundEMethodNotAllowed(t *testing.T) {
 		{name: "emprestimos com barra final", method: http.MethodGet, path: "/emprestimos/", auth: true, status: 404},
 		{name: "usuarios com barra final", method: http.MethodGet, path: "/usuarios/", auth: true, status: 404},
 		{name: "usuario com barra final", method: http.MethodGet, path: "/usuarios/1/", auth: true, status: 404},
-		{name: "subrota de usuario", method: http.MethodGet, path: "/usuarios/1/emprestimos", auth: true, status: 404},
+		// DEL-015: GET /usuarios/{id}/emprestimos passou a existir; o resto
+		// abaixo de /usuarios/{id} continua sem rota.
+		{name: "subrota desconhecida de usuario", method: http.MethodGet, path: "/usuarios/1/x", auth: true, status: 404},
+		{name: "emprestimos do usuario com barra final", method: http.MethodGet, path: "/usuarios/1/emprestimos/", auth: true, status: 404},
+		{name: "emprestimo do usuario por id", method: http.MethodGet, path: "/usuarios/1/emprestimos/2", auth: true, status: 404},
+		{name: "POST em emprestimos do usuario", method: http.MethodPost, path: "/usuarios/1/emprestimos", auth: true, status: 405},
+		{name: "DELETE em emprestimos do usuario", method: http.MethodDelete, path: "/usuarios/1/emprestimos", auth: true, status: 405},
+		{name: "emprestimos de livro (U2: fora)", method: http.MethodGet, path: "/livros/1/emprestimos", auth: true, status: 404},
 		{name: "POST em /emprestimos", method: http.MethodPost, path: "/emprestimos", auth: true, status: 405},
 		{name: "DELETE em /usuarios", method: http.MethodDelete, path: "/usuarios", auth: true, status: 405},
 		{name: "PUT no usuario por id", method: http.MethodPut, path: "/usuarios/1", auth: true, status: 405},

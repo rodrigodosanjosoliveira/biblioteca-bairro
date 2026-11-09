@@ -2,11 +2,14 @@ package storage
 
 import (
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/rodrigodosanjosoliveira/biblioteca-bairro/migrations"
 )
 
 // Constraints esperadas (sem as NOT NULL, que o PostgreSQL 18 também registra
@@ -24,12 +27,82 @@ var constraintsEsperadas = map[string]string{
 }
 
 var indicesEsperados = []string{
+	"emprestimo_aberto_id_idx",
+	"emprestimo_livro_aberto_uq",
+	"emprestimo_livro_id_id_idx",
+	"emprestimo_livro_id_idx",
+	"emprestimo_pkey",
+	"emprestimo_usuario_id_id_idx",
+	"emprestimo_usuario_id_idx",
+	"livro_pkey",
+	"usuario_pkey",
+}
+
+// indicesAte0002 são os índices do esquema com 0001 e 0002 (sem a 0003).
+var indicesAte0002 = []string{
 	"emprestimo_livro_aberto_uq",
 	"emprestimo_livro_id_idx",
 	"emprestimo_pkey",
 	"emprestimo_usuario_id_idx",
 	"livro_pkey",
 	"usuario_pkey",
+}
+
+// Migração 0003 (DEL-015): índices da listagem filtrada de empréstimos.
+const (
+	up0003   = "0003_indices_listagem_emprestimo.up.sql"
+	down0003 = "0003_indices_listagem_emprestimo.down.sql"
+)
+
+// definicoes0003 são os sufixos exatos do indexdef (pg_indexes) dos índices
+// da 0003; o prefixo traz o schema descartável.
+var definicoes0003 = map[string]string{
+	"emprestimo_usuario_id_id_idx": "USING btree (usuario_id, id)",
+	"emprestimo_livro_id_id_idx":   "USING btree (livro_id, id)",
+	"emprestimo_aberto_id_idx":     "USING btree (id) WHERE (devolucao IS NULL)",
+}
+
+// indicesDoSchema devolve nome -> indexdef dos índices do schema.
+func indicesDoSchema(t *testing.T, c *pgx.Conn, schema string) map[string]string {
+	t.Helper()
+	idx := map[string]string{}
+	rows, err := c.Query(t.Context(), `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1`, schema)
+	if err != nil {
+		t.Fatalf("consultar pg_indexes: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var nome, def string
+		if err := rows.Scan(&nome, &def); err != nil {
+			t.Fatalf("ler pg_indexes: %v", err)
+		}
+		idx[nome] = def
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterar pg_indexes: %v", err)
+	}
+	return idx
+}
+
+func nomesOrdenados(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for n := range m {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// aplicarArquivo executa um único arquivo do FS embutido.
+func aplicarArquivo(t *testing.T, c *pgx.Conn, nome string) {
+	t.Helper()
+	sql, err := fs.ReadFile(migrations.FS, nome)
+	if err != nil {
+		t.Fatalf("ler %s: %v", nome, err)
+	}
+	if _, err := c.Exec(t.Context(), string(sql)); err != nil {
+		t.Fatalf("aplicar %s: %v", nome, err)
+	}
 }
 
 type coluna struct {
@@ -173,6 +246,13 @@ func checarCatalogo(t *testing.T, c *pgx.Conn, schema string) {
 			t.Errorf("%s = %q, want índice simples em %s", nome, d, col)
 		}
 	}
+	// Índices da 0003: definição exata, não UNIQUE.
+	for nome, sufixo := range definicoes0003 {
+		d := idx[nome]
+		if !strings.HasPrefix(d, "CREATE INDEX "+nome+" ON ") || !strings.HasSuffix(d, " "+sufixo) {
+			t.Errorf("%s = %q, want CREATE INDEX ... %s", nome, d, sufixo)
+		}
+	}
 
 	// Default do contador de renovações: constante 0 (backfill sem rewrite).
 	var defRenov string
@@ -250,6 +330,18 @@ func TestMigracaoUpDownUp(t *testing.T) {
 
 	aplicar(t, c, ".up.sql")
 	checarCatalogo(t, c, b.schema)
+
+	// Só o down da 0003: remove exatamente os três índices dela e não toca
+	// os da 0001; o up da 0003 os recria.
+	t.Run("down só da 0003", func(t *testing.T) {
+		aplicarArquivo(t, c, down0003)
+		idx := indicesDoSchema(t, c, b.schema)
+		if got := strings.Join(nomesOrdenados(idx), ","); got != strings.Join(indicesAte0002, ",") {
+			t.Errorf("índices depois do down da 0003 = %s, want %v", got, indicesAte0002)
+		}
+		aplicarArquivo(t, c, up0003)
+		checarCatalogo(t, c, b.schema)
+	})
 }
 
 // Violações das regras do esquema por SQL direto, sem passar pelo repositório.

@@ -435,7 +435,8 @@ executor). Procedimentos operacionais em `docs-ai/RUNBOOK-MIGRACAO.md`.
 - **G7, `CONCURRENTLY`.** O v1 recusa a palavra em qualquer ponto do `.up.sql`,
   inclusive comentário e literal (falso positivo aceito). A regra "sozinhos no
   arquivo" da D-13 continua valendo para o dia em que houver decisão nova; índice
-  em tabela com dados vira procedimento manual fora do executor.
+  em tabela com dados vira procedimento manual fora do executor. (Exceção
+  restrita à 0003, com limite de cerca de 1 milhão de linhas: U3 da D-21.)
 - **G8, checksum.** sha256 dos bytes brutos do `.up.sql`. Divergência aborta sem
   reaplicar nem atualizar o registro; `nome` diferente também conta.
 - **G9, transação.** Um arquivo por transação.
@@ -831,4 +832,195 @@ reidratação segue `GET /emprestimos/{id}`.
 **Consequências:** filtros e `GET /usuarios/{id}/emprestimos` (U1), busca por
 nome, ordenação configurável, total e rate limit ficam para deliveries
 futuras. O off-by-one e a ordem das consultas novas só são pegos com banco: o
-CI precisa continuar com `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`.
+CI precisa continuar com `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`. (Os filtros e
+`GET /usuarios/{id}/emprestimos` entraram na DEL-015, D-21, que também amplia
+a condição de bloqueio acima.)
+
+## D-21 — Filtros de empréstimos (`situacao`, `usuario_id`, `livro_id`), `GET /usuarios/{id}/emprestimos` e índices da 0003
+
+Decisões do `pm-triage`, do `architecture-guardrails`, do `data-model` e do
+usuário (U1, U2, U3) na DEL-015. Cumpre a U1 da D-20. O contrato de paginação
+da D-19 continua sem variação; nenhum código de erro, mensagem, status ou DTO
+existente muda.
+
+**Filtros em `GET /emprestimos`.**
+
+- Query params novos, além de `limite` e `apos`: `situacao` ∈ {`aberto`,
+  `devolvido`, `vencido`} (minúsculas, sem acento, comparação exata),
+  `usuario_id` e `livro_id` (gramática do `parseID`, inteiro > 0).
+- Todos se combinam por AND, inclusive com `limite` e `apos`. Combinação sem
+  resultado, inclusive id de usuário ou livro inexistente, → 200
+  `{"itens":[],"proximo":null}`, sem consulta de existência (filtro não é
+  recurso).
+- Valor vazio (`situacao=`), outro valor, maiúscula, acento, lista
+  (`situacao=aberto,vencido`), chave repetida (mesmo com valores diferentes) e
+  id fora da gramática → 400 `parametro_invalido`, mensagem fixa e sem eco.
+- `situacao` é filtro, não campo: o item continua igual ao de
+  `GET /emprestimos/{id}`.
+- `GET /livros` e `GET /usuarios` continuam aceitando só `limite` e `apos`.
+
+**Rota `GET /usuarios/{id}/emprestimos`.** Atrás do mesmo `auth(...)`, mesmo
+contrato de paginação e mesmo item. Aceita `limite`, `apos`, `situacao` e
+`livro_id`; `usuario_id` na query → 400 `parametro_invalido` (o usuário vem do
+path e não pode ser sobrescrito). Ordem de erros: `id_invalido` (400) →
+`parametro_invalido` (400) → `usuario_inexistente` (404). A existência do
+usuário é conferida por `BuscarUsuario` em **toda** página, sem transação
+(consistência eventual da D-19; usuário não é apagado: FK `ON DELETE RESTRICT`
+e nenhuma rota de exclusão), dentro de um único `context.WithTimeout` para as
+duas consultas. `storage.ErrUsuarioNaoEncontrado` vindo de `BuscarUsuario` é
+mapeado localmente para 404 `usuario_inexistente`, como em `obterUsuario`; o
+mesmo erro vindo de `ListarEmprestimos` vira 500.
+
+**Storage.** `ListarEmprestimos(ctx, f FiltroEmprestimos, apos, limite)` é o
+único ponto de entrada (sem método paralelo). `FiltroEmprestimos{UsuarioID,
+LivroID int64; Situacao Situacao; Ref time.Time}`, com `Situacao` em iota
+(`SituacaoTodas` zero, `SituacaoAberto`, `SituacaoDevolvido`,
+`SituacaoVencido`). O SQL é montado por `sqlListarEmprestimos` só com
+fragmentos constantes, em ordem fixa (usuário, livro, situação), com o número
+do placeholder gerado por contador interno e os valores só nos argumentos: no
+máximo 16 textos estáveis, um prepared statement por texto no cache do pgx.
+Com o filtro zero, o texto é byte a byte o da D-20. Proibidos: concatenar
+valor, `($n IS NULL OR ...)`/`COALESCE` (o plano genérico perde o índice),
+`now()`, `CURRENT_DATE`, `AT TIME ZONE`. O `+1`, o teto e a validação de
+`apos`/`limite` continuam só em `listarPorID`, que repassa os argumentos
+extras.
+
+**Erro interno (correção do texto da D-19/D-20).** Filtro inválido no storage
+(id negativo, situação fora do enum, vencido sem `Ref`) devolve
+`storage.ErrListagemInvalida` antes de qualquer SQL. Esse erro está em
+`errosDeBug` (`internal/http/erros.go`): a resposta é 500 com o código
+`erro_interno`, e `bug_interno` é só a `causa` gravada no log, não o código da
+resposta (divergência apontada pelo QA da DEL-015; o mapeamento é anterior e
+não mudou).
+
+**Regra de vencido.** A regra continua no domínio
+(`meiaNoiteUTC(ref) > meiaNoiteUTC(vencimento)`, usada por `Renovar` e, de forma
+equivalente, por `Multa` com dias > 0; D-17, D-11) e é traduzida num único
+ponto do storage: `devolucao IS NULL AND vencimento < $hoje`, com
+`$hoje = vencimentoParaDate(Ref)`, a mesma função que grava a coluna
+`vencimento` (data civil em `America/Sao_Paulo` em meia-noite UTC). Coluna e
+parâmetro ficam no mesmo espaço, então o SQL equivale ao domínio; o dia do
+vencimento não é vencido. O handler lê o relógio injetado uma vez por
+requisição, põe o instante em `Ref` em toda requisição e usa o mesmo instante
+na multa dos itens: item filtrado como vencido nunca sai com multa zero. O fuso
+da sessão do banco não interfere. Barreira contra divergência: teste com banco
+que cruza `situacao=vencido` com `Multa > 0` e `Renovar ==
+ErrEmprestimoVencido` nas fronteiras de 23:59:59 e 00:00 SP, em cinco fusos de
+sessão.
+
+**Decisões do usuário.**
+
+- U1: `situacao=aberto` inclui os vencidos (`devolucao IS NULL`, como
+  `Emprestimo.Aberto()`); `vencido` é subconjunto de `aberto`; `devolvido` =
+  `devolucao IS NOT NULL`, com ou sem atraso.
+- U2: entra só a rota aninhada de usuário. `GET /livros/{id}/emprestimos` fica
+  fora (redundante com `?livro_id=` e confundível com o singular
+  `GET /livros/{id}/emprestimo`); há teste exigindo 404 para ela.
+- U3: a migração 0003 roda pelo executor (`migrate up`), como **exceção
+  restrita à 0003** à regra "índice em tabela com dados é procedimento manual"
+  (D-16 G7, runbook §6). Condições: conferir antes o tamanho da tabela
+  (`count(*)` e `pg_total_relation_size`), rodar em horário de pouco uso e, acima
+  de cerca de 1 milhão de linhas em `emprestimo`, não usar o executor e seguir o
+  procedimento manual. A premissa de 10^4–10^5 linhas em produção não foi
+  verificada; a conferência é a única barreira. A exceção não vale como
+  precedente para outras migrações.
+
+**Migração 0003 (`0003_indices_listagem_emprestimo`).** Aditiva, só
+`CREATE INDEX` sem a opção online:
+
+- `emprestimo_usuario_id_id_idx (usuario_id, id)` e
+  `emprestimo_livro_id_id_idx (livro_id, id)`: keyset filtrado já na ordem do
+  cursor, sem Sort;
+- `emprestimo_aberto_id_idx (id) WHERE devolucao IS NULL`: abertos e vencidos
+  sem filtro de FK; abertos são no máximo um por livro
+  (`emprestimo_livro_aberto_uq`), e `vencimento < $hoje` é Filter sobre eles
+  (vencido não é indexável: depende do relógio);
+- sem índice para `devolvido` (maioria das linhas; a PK com Filter basta), sem
+  `INCLUDE` e sem parciais compostos;
+- sem `IF NOT EXISTS` no up nem `IF EXISTS`/`CASCADE` no down, como 0001/0002;
+  o down remove só os três índices, em ordem inversa, e não é destrutivo em
+  dado.
+
+D7: os três índices ficam **num arquivo só**. Interpretação explícita da regra
+"um DDL pesado por arquivo" (D-16, runbook §7): a regra existe porque N
+comandos lentos seguram ACCESS EXCLUSIVE por N vezes o `statement_timeout`.
+Aqui o lock é SHARE (leituras seguem; INSERT/UPDATE de empréstimo esperam até
+o COMMIT do arquivo), o mesmo nos três comandos (o `lock_timeout` só pesa na
+primeira aquisição) e o custo é a soma de três construções numa tabela pequena.
+Dividir em três arquivos encurtaria cada janela, não o total, e criaria estado
+intermediário.
+
+Ordem de deploy: `migrate up` antes do binário novo. Não há acoplamento de
+corretude: o binário novo funciona sem os índices (mesmas respostas, planos
+piores) e o antigo convive com eles. Rollback: reverter só o binário; o down é
+dispensável e, se rodado, vai por `psql` com `SET lock_timeout` (runbook).
+
+**Índices simples da 0001.** `emprestimo_usuario_id_idx` e
+`emprestimo_livro_id_idx` ficam redundantes com os compostos (mesma coluna
+líder), mas não saem na 0003: `DROP INDEX` toma ACCESS EXCLUSIVE, o executor só
+sobe e o custo de mantê-los é pequeno. A remoção fica para delivery própria,
+em migração própria. **Critério de remoção** (S1 do code-reviewer, substitui o
+`pg_stat_user_indexes.idx_scan` estável proposto no guardrail): evidência de
+plano, não de uso. Nas combinações usuário+situação e usuário+livro o planner
+prefere BitmapAnd com folhas nos índices simples (menores), então o `idx_scan`
+deles nunca para de crescer. A delivery de remoção deve acrescentar a
+`TestPlanoListarEmprestimos` um subteste que faz `DROP` dos dois simples na
+fixture e reaplica a checagem de plano, provando que os compostos assumem sem
+Seq Scan nem Sort sem limite.
+
+**Plano conferido em teste** (`query-performance` não habilitado):
+`TestPlanoListarEmprestimos` roda `EXPLAIN` genérico e custom das 16
+combinações numa massa de 200 mil linhas no PostgreSQL 16 do CI. Índice único
+exigido em 1-5, 8, 9 e 12; nas combinações 6, 7 e 13-16 (duas condições
+seletivas e independentes) aceita também Bitmap Heap Scan sobre BitmapAnd com
+Sort acima, porque nenhuma proporção de massa faz o planner preferir o
+composto sem `SET enable_*`. Continuam proibidos Seq Scan, Bitmap sem
+interseção e Index Scan nos índices simples.
+
+**Riscos aceitos.**
+
+- MEDIO (amplia o MEDIO da U2 da D-20): com o token, o histórico de leitura de
+  uma pessoa sai numa requisição por página já filtrado
+  (`GET /usuarios/{id}/emprestimos`, `?usuario_id=`), e ficou trivial obter
+  "quem está com o livro X" (`?livro_id=&situacao=aberto`) e "quem está em
+  atraso" (`?situacao=vencido`). Continua dentro do modelo de token único e
+  operador único. **Condição de bloqueio ampliada:** com vários tokens ou login
+  de usuário final, além das três rotas da D-20, `GET /usuarios/{id}/emprestimos`
+  e os filtros `usuario_id`, `livro_id` e `situacao` de `GET /emprestimos`
+  exigem autorização por recurso **antes** dessa mudança (na rota aninhada: o
+  dono do `{id}` ou o operador). Rate limit e log de volume por cliente seguem
+  ausentes.
+- BAIXO, informativo: a rota aninhada responde 404 `usuario_inexistente` e
+  `?usuario_id=` responde 200 vazio para id inexistente (oráculo de existência
+  que a listagem autenticada já revela; mesmo risco da D-20).
+- BAIXO, informativo: a rota aninhada faz duas consultas por página
+  (`BuscarUsuario` e `ListarEmprestimos`), limitadas por `limite <= 100` e um
+  prazo único; amplificação só para quem tem o token.
+- Lock da 0003: `CREATE INDEX` sem a opção online bloqueia abrir, devolver e
+  renovar durante a construção. Pior caso teórico: 3 × `statement_timeout`
+  (padrão 60s) com escritas bloqueadas; como a API dá 5s às escritas, uma
+  construção acima disso faz essas rotas responderem erro. Mitigação só
+  operacional (U3 e runbook). Autovacuum anti-wraparound em `emprestimo` faz o
+  `CREATE` esperar até o `lock_timeout` e falhar com rollback limpo.
+- `situacao=vencido` muda de resultado com a virada do dia civil SP sem
+  escrita; paginando através da meia-noite SP, um empréstimo pode entrar no
+  conjunto numa página já passada (consistência eventual, como a D-19). Sem
+  teste para esse caso, por não ser defeito.
+- Custo de `vencido` proporcional aos abertos percorridos até completar a
+  página, limitado pelo número de livros.
+- Folga do EXPLAIN nas combinações 6, 7 e 13-16: uma regressão que troque o
+  composto por outro índice nelas só é pega se o plano sair do BitmapAnd;
+  limitada pelos casos estritos 5, 8, 9 e 12.
+- Índices redundantes (simples e compostos) até a delivery de remoção.
+
+**Motivo:** um só ponto de entrada e fragmentos constantes mantêm o SQL
+parametrizado, com texto estável e plano bom no cache do pgx; `$hoje` vindo da
+mesma conversão do vencimento evita duas definições de vencido; índices
+compostos `(fk, id)` atendem o keyset sem Sort; a exceção U3 evita um
+procedimento manual para uma tabela pequena, com barreira operacional.
+
+**Consequências:** `GET /livros/{id}/emprestimos`, ordenação configurável,
+total, busca, filtro por datas, coluna de situação persistida e a remoção dos
+índices simples ficam para deliveries futuras. A regra de vencido, o EXPLAIN e
+o up/down da 0003 só são exercitados com banco: o CI precisa continuar com
+PostgreSQL e `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`.

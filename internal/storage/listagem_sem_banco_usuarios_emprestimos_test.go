@@ -45,7 +45,7 @@ func listagensNovas() []listagemNova {
 		{
 			nome: "ListarEmprestimos",
 			listar: func(r *Repositorio, ctx context.Context, apos int64, limite int) ([]int64, bool, error) {
-				got, mais, err := r.ListarEmprestimos(ctx, apos, limite)
+				got, mais, err := r.ListarEmprestimos(ctx, FiltroEmprestimos{}, apos, limite)
 				if err == nil && got == nil {
 					return nil, mais, errors.New("teste: ListarEmprestimos devolveu nil sem erro, want slice vazia")
 				}
@@ -343,7 +343,7 @@ func TestListarEmprestimosLinhaInvalidaSemBanco(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			linhas := &linhasFalsas{linhas: tt.linhas}
-			got, mais, err := NovoRepositorio(&dbLinhas{linhas: linhas}).ListarEmprestimos(context.Background(), 0, tt.limite)
+			got, mais, err := NovoRepositorio(&dbLinhas{linhas: linhas}).ListarEmprestimos(context.Background(), FiltroEmprestimos{}, 0, tt.limite)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("erro = %v, want %v", err, tt.wantErr)
@@ -386,7 +386,7 @@ func TestListarEmprestimosReidrataCampos(t *testing.T) {
 		{int64(11), int64(21), int64(31), inicio, venc, (*time.Time)(nil), 1},
 		{int64(12), int64(22), int64(32), inicio, time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), &dev, 0},
 	}}
-	got, mais, err := NovoRepositorio(&dbLinhas{linhas: linhas}).ListarEmprestimos(context.Background(), 0, 20)
+	got, mais, err := NovoRepositorio(&dbLinhas{linhas: linhas}).ListarEmprestimos(context.Background(), FiltroEmprestimos{}, 0, 20)
 	if err != nil || mais || len(got) != 2 {
 		t.Fatalf("ListarEmprestimos = %d itens, %v, %v; want 2, false, nil", len(got), mais, err)
 	}

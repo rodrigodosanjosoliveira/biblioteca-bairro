@@ -107,6 +107,9 @@ type repoFake struct {
 	listarEmprRet         []domain.Emprestimo
 	listarEmprTemMais     bool
 	aoListarEmpr          func()
+
+	// DEL-015: filtro recebido por ListarEmprestimos.
+	listarEmprFiltro storage.FiltroEmprestimos
 }
 
 func (r *repoFake) registrar(ctx context.Context, nome string) error {
@@ -291,7 +294,7 @@ func (r *repoFake) ListarUsuarios(ctx context.Context, apos int64, limite int) (
 	return r.listarUsuariosRet, r.listarUsuariosTemMais, nil
 }
 
-func (r *repoFake) ListarEmprestimos(ctx context.Context, apos int64, limite int) ([]domain.Emprestimo, bool, error) {
+func (r *repoFake) ListarEmprestimos(ctx context.Context, f storage.FiltroEmprestimos, apos int64, limite int) ([]domain.Emprestimo, bool, error) {
 	if err := r.registrar(ctx, "ListarEmprestimos"); err != nil {
 		return nil, false, err
 	}
@@ -299,6 +302,7 @@ func (r *repoFake) ListarEmprestimos(ctx context.Context, apos int64, limite int
 		r.aoListarEmpr()
 	}
 	r.listarApos, r.listarLimite = apos, limite
+	r.listarEmprFiltro = f
 	if r.errListarEmpr != nil {
 		return nil, false, r.errListarEmpr
 	}
@@ -457,6 +461,7 @@ func rotasProtegidas() []rota {
 		{nome: "GET /usuarios", method: http.MethodGet, path: "/usuarios"},
 		{nome: "GET /usuarios/{id}", method: http.MethodGet, path: "/usuarios/1"},
 		{nome: "GET /emprestimos", method: http.MethodGet, path: "/emprestimos"},
+		{nome: "GET /usuarios/{id}/emprestimos", method: http.MethodGet, path: "/usuarios/1/emprestimos"},
 	}
 }
 
