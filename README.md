@@ -168,6 +168,37 @@ pular se a URL faltar. As duas variáveis valem só para esse `go test`; um
 `trust` dispensa senha: use só nesse banco de teste local ou no CI, nunca no
 banco da API. Por isso o bloco remove o container ao final.
 
+### Postman
+
+`postman/` traz uma coleção (formato v2.1.0) com todas as rotas da API e um
+environment modelo, com `base_url` em `http://localhost:8080` e `token` vazio.
+
+1. Copie o environment para o nome local, ignorado pelo git:
+
+   ```sh
+   cp postman/biblioteca-bairro.postman_environment.json \
+     postman/biblioteca-bairro.local.postman_environment.json
+   ```
+
+2. No Postman, importe `postman/biblioteca-bairro.postman_collection.json` e a
+   cópia `.local`, e selecione o environment.
+3. Preencha `token` com o valor de `BIBLIOTECA_API_TOKEN` só no valor atual
+   (current value). Nunca grave o token no environment versionado; se exportar
+   o environment, salve só por cima da cópia `.local`.
+4. Ordem sugerida: Criar livro, Criar usuário, Abrir empréstimo, as consultas,
+   Renovar empréstimo e Devolver livro.
+
+`/healthz` e `/readyz` vão sem autenticação; as demais rotas usam
+`Authorization: Bearer {{token}}`, definido na coleção. Os scripts de
+pós-resposta só gravam no environment os ids criados (`livro_id`, `usuario_id`,
+`emprestimo_id`) e o cursor `proximo` das listagens. Os parâmetros de query
+opcionais vêm desligados: a API responde 400 `parametro_invalido` a chave
+desconhecida, repetida ou com valor vazio. Ligue `apos` só quando o cursor
+tiver valor: na última página (`proximo` null) o script remove o cursor, e o
+Postman passa a enviar o texto literal `{{cursor_...}}`, que também dá 400
+`parametro_invalido`. A coleção é mantida à mão: rota nova
+em `internal/http/handler.go` exige atualizá-la.
+
 ## Deliveries
 
 O índice fica em [`docs-ai/deliveries/INDEX.md`](docs-ai/deliveries/INDEX.md).

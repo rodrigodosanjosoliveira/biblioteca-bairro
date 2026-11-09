@@ -22,6 +22,7 @@
 ├── migrations/             # migrações SQL do PostgreSQL (superfície de segurança)
 │   └── controle/           # SQL da tabela de controle `migracao_aplicada`
 ├── docs-ai/                # decisões, invariantes, runbook de migração, contrato de handoff e deliveries
+├── postman/                # coleção Postman v2.1.0 das rotas e environment modelo com token vazio (D-22); rota nova exige atualizar
 ├── Makefile                # gates e instalação do pipeline-claude
 ├── Dockerfile              # imagem multi-stage: builder golang stable e runtime distroless nonroot, por digest (D-18)
 ├── .dockerignore           # allowlist do contexto de build: go.mod, go.sum, cmd/, internal/, migrations/

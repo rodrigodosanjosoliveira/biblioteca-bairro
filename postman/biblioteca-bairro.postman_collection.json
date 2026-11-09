@@ -1,0 +1,497 @@
+{
+  "info": {
+    "_postman_id": "6f3c2a1e-8b4d-4c7a-9e2f-1d5b7a9c3e01",
+    "name": "biblioteca-bairro",
+    "description": "Coleção da API biblioteca-bairro (todas as rotas de internal/http/handler.go).\n\nUso: selecione o environment biblioteca-bairro, preencha `token` (valor de BIBLIOTECA_API_TOKEN) só na cópia local e nunca versione o token. Todas as rotas exigem `Authorization: Bearer {{token}}`, exceto /healthz e /readyz.\n\nOrdem sugerida: Criar livro → Criar usuário → Abrir empréstimo → consultas → Renovar → Devolver. Os scripts de pós-resposta só gravam no environment os ids criados (livro_id, usuario_id, emprestimo_id) e o cursor `proximo` das listagens; não há asserções.\n\nErros respondem `{\"erro\": {\"codigo\": \"...\", \"mensagem\": \"...\"}}`. Token ausente ou errado: 401 nao_autorizado. Prazo do banco estourado: 503 indisponivel. Corpo acima de 64 KiB: 413 corpo_muito_grande.\n\nListagens: parâmetros de query opcionais vêm desligados. Chave desconhecida, repetida ou com valor inválido (inclusive vazio) dá 400 parametro_invalido; ligue `apos` só quando o cursor estiver preenchido (na última página `proximo` é null e o script apaga o cursor).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Saúde",
+      "description": "Rotas sem autenticação, usadas como liveness e readiness.",
+      "item": [
+        {
+          "name": "Healthz",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/healthz",
+              "host": ["{{base_url}}"],
+              "path": ["healthz"]
+            },
+            "description": "Liveness. 200 `{\"status\": \"ok\"}`. Sem autenticação."
+          },
+          "response": []
+        },
+        {
+          "name": "Readyz",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/readyz",
+              "host": ["{{base_url}}"],
+              "path": ["readyz"]
+            },
+            "description": "Readiness (Ping no banco). 200 `{\"status\": \"ok\"}`; 503 indisponivel se o banco não responder. Sem autenticação."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Livros",
+      "item": [
+        {
+          "name": "Criar livro",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.environment.set('livro_id', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titulo\": \"Livro Exemplo\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/livros",
+              "host": ["{{base_url}}"],
+              "path": ["livros"]
+            },
+            "description": "Corpo `{\"titulo\": string}`; campo desconhecido é recusado. 201 `{id, titulo}` (o script grava `livro_id`). Erros: 400 corpo_invalido; 413 corpo_muito_grande; 422 titulo_vazio, texto_invalido."
+          },
+          "response": []
+        },
+        {
+          "name": "Listar livros",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const proximo = pm.response.json().proximo;",
+                  "  if (proximo === null || proximo === undefined) {",
+                  "    pm.environment.unset('cursor_livros');",
+                  "  } else {",
+                  "    pm.environment.set('cursor_livros', String(proximo));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/livros",
+              "host": ["{{base_url}}"],
+              "path": ["livros"],
+              "query": [
+                {
+                  "key": "limite",
+                  "value": "20",
+                  "description": "Inteiro de 1 a 100; padrão 20.",
+                  "disabled": true
+                },
+                {
+                  "key": "apos",
+                  "value": "{{cursor_livros}}",
+                  "description": "Cursor: valor de `proximo` da página anterior (id > 0).",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Página `{itens: [{id, titulo}], proximo}` em ordem de id; `proximo` é null na última página (o script grava ou apaga `cursor_livros`). Aceita só `limite` e `apos`. Erros: 400 parametro_invalido."
+          },
+          "response": []
+        },
+        {
+          "name": "Obter livro",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/livros/{{livro_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["livros", "{{livro_id}}"]
+            },
+            "description": "200 `{id, titulo}`. Erros: 400 id_invalido; 404 livro_nao_encontrado."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Usuários",
+      "item": [
+        {
+          "name": "Criar usuário",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.environment.set('usuario_id', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Usuário Exemplo\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/usuarios",
+              "host": ["{{base_url}}"],
+              "path": ["usuarios"]
+            },
+            "description": "Corpo `{\"nome\": string}` (dado pessoal: use nome fictício); campo desconhecido é recusado. 201 `{id, nome}` (o script grava `usuario_id`). Erros: 400 corpo_invalido; 413 corpo_muito_grande; 422 nome_vazio, texto_invalido."
+          },
+          "response": []
+        },
+        {
+          "name": "Listar usuários",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const proximo = pm.response.json().proximo;",
+                  "  if (proximo === null || proximo === undefined) {",
+                  "    pm.environment.unset('cursor_usuarios');",
+                  "  } else {",
+                  "    pm.environment.set('cursor_usuarios', String(proximo));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/usuarios",
+              "host": ["{{base_url}}"],
+              "path": ["usuarios"],
+              "query": [
+                {
+                  "key": "limite",
+                  "value": "20",
+                  "description": "Inteiro de 1 a 100; padrão 20.",
+                  "disabled": true
+                },
+                {
+                  "key": "apos",
+                  "value": "{{cursor_usuarios}}",
+                  "description": "Cursor: valor de `proximo` da página anterior (id > 0).",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Página `{itens: [{id, nome}], proximo}` em ordem de id; `proximo` é null na última página (o script grava ou apaga `cursor_usuarios`). Aceita só `limite` e `apos`. Erros: 400 parametro_invalido."
+          },
+          "response": []
+        },
+        {
+          "name": "Obter usuário",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/usuarios/{{usuario_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["usuarios", "{{usuario_id}}"]
+            },
+            "description": "200 `{id, nome}`. Erros: 400 id_invalido; 404 usuario_inexistente."
+          },
+          "response": []
+        },
+        {
+          "name": "Listar empréstimos do usuário",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const proximo = pm.response.json().proximo;",
+                  "  if (proximo === null || proximo === undefined) {",
+                  "    pm.environment.unset('cursor_emprestimos_usuario');",
+                  "  } else {",
+                  "    pm.environment.set('cursor_emprestimos_usuario', String(proximo));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/usuarios/{{usuario_id}}/emprestimos",
+              "host": ["{{base_url}}"],
+              "path": ["usuarios", "{{usuario_id}}", "emprestimos"],
+              "query": [
+                {
+                  "key": "situacao",
+                  "value": "aberto",
+                  "description": "aberto, devolvido ou vencido (comparação exata).",
+                  "disabled": true
+                },
+                {
+                  "key": "livro_id",
+                  "value": "{{livro_id}}",
+                  "description": "Id de livro (> 0).",
+                  "disabled": true
+                },
+                {
+                  "key": "limite",
+                  "value": "20",
+                  "description": "Inteiro de 1 a 100; padrão 20.",
+                  "disabled": true
+                },
+                {
+                  "key": "apos",
+                  "value": "{{cursor_emprestimos_usuario}}",
+                  "description": "Cursor: valor de `proximo` da página anterior (id > 0).",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Página `{itens: [empréstimo], proximo}` dos empréstimos do usuário (o script grava ou apaga `cursor_emprestimos_usuario`). Não aceita `usuario_id` na query (400). Erros: 400 id_invalido, parametro_invalido; 404 usuario_inexistente."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Empréstimos",
+      "description": "Empréstimo na resposta: `{id, livro_id, usuario_id, inicio, vencimento, devolucao, multa, renovacoes}`; instantes em RFC 3339 UTC, `vencimento` como AAAA-MM-DD, `devolucao` null enquanto aberto, `multa` string com duas casas.",
+      "item": [
+        {
+          "name": "Abrir empréstimo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.environment.set('emprestimo_id', String(pm.response.json().id));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": {{usuario_id}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/livros/{{livro_id}}/emprestimo",
+              "host": ["{{base_url}}"],
+              "path": ["livros", "{{livro_id}}", "emprestimo"]
+            },
+            "description": "Corpo `{\"usuario_id\": número}`; o livro vem do path. 201 com o empréstimo (o script grava `emprestimo_id`). Erros: 400 id_invalido, corpo_invalido; 404 livro_nao_encontrado; 409 livro_ja_emprestado; 413 corpo_muito_grande; 422 usuario_id_invalido, usuario_nao_encontrado."
+          },
+          "response": []
+        },
+        {
+          "name": "Consultar empréstimo aberto do livro",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/livros/{{livro_id}}/emprestimo",
+              "host": ["{{base_url}}"],
+              "path": ["livros", "{{livro_id}}", "emprestimo"]
+            },
+            "description": "200 com o empréstimo aberto do livro e a multa calculada agora. Erros: 400 id_invalido; 404 emprestimo_aberto_nao_encontrado."
+          },
+          "response": []
+        },
+        {
+          "name": "Renovar empréstimo",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/livros/{{livro_id}}/renovacao",
+              "host": ["{{base_url}}"],
+              "path": ["livros", "{{livro_id}}", "renovacao"]
+            },
+            "description": "Corpo vazio (qualquer byte dá 400 corpo_invalido). +14 dias sobre o vencimento, no máximo 2 vezes. 200 com o empréstimo. Erros: 400 id_invalido, corpo_invalido; 404 emprestimo_aberto_nao_encontrado; 409 emprestimo_vencido, limite_renovacoes_atingido, emprestimo_alterado."
+          },
+          "response": []
+        },
+        {
+          "name": "Devolver livro",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/livros/{{livro_id}}/devolucao",
+              "host": ["{{base_url}}"],
+              "path": ["livros", "{{livro_id}}", "devolucao"]
+            },
+            "description": "Corpo vazio (qualquer byte dá 400 corpo_invalido). 200 com o empréstimo devolvido e a multa final. Erros: 400 id_invalido, corpo_invalido; 404 emprestimo_aberto_nao_encontrado; 409 emprestimo_ja_devolvido, emprestimo_alterado."
+          },
+          "response": []
+        },
+        {
+          "name": "Listar empréstimos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const proximo = pm.response.json().proximo;",
+                  "  if (proximo === null || proximo === undefined) {",
+                  "    pm.environment.unset('cursor_emprestimos');",
+                  "  } else {",
+                  "    pm.environment.set('cursor_emprestimos', String(proximo));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/emprestimos",
+              "host": ["{{base_url}}"],
+              "path": ["emprestimos"],
+              "query": [
+                {
+                  "key": "situacao",
+                  "value": "aberto",
+                  "description": "aberto, devolvido ou vencido (comparação exata).",
+                  "disabled": true
+                },
+                {
+                  "key": "usuario_id",
+                  "value": "{{usuario_id}}",
+                  "description": "Id de usuário (> 0); id inexistente dá lista vazia.",
+                  "disabled": true
+                },
+                {
+                  "key": "livro_id",
+                  "value": "{{livro_id}}",
+                  "description": "Id de livro (> 0); id inexistente dá lista vazia.",
+                  "disabled": true
+                },
+                {
+                  "key": "limite",
+                  "value": "20",
+                  "description": "Inteiro de 1 a 100; padrão 20.",
+                  "disabled": true
+                },
+                {
+                  "key": "apos",
+                  "value": "{{cursor_emprestimos}}",
+                  "description": "Cursor: valor de `proximo` da página anterior (id > 0).",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Página `{itens: [empréstimo], proximo}` em ordem de id; filtros combinados com AND (o script grava ou apaga `cursor_emprestimos`). Erros: 400 parametro_invalido."
+          },
+          "response": []
+        },
+        {
+          "name": "Obter empréstimo",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/emprestimos/{{emprestimo_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["emprestimos", "{{emprestimo_id}}"]
+            },
+            "description": "200 com o empréstimo, aberto ou devolvido. Erros: 400 id_invalido; 404 emprestimo_nao_encontrado."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
