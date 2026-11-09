@@ -28,13 +28,16 @@ var listagensNovas = []struct{ path, metodo string }{
 
 // TestListagensNovasParametros: GET /usuarios e GET /emprestimos seguem a
 // mesma gramática de GET /livros (D-19), sem variação: só limite e apos, cada
-// um no máximo uma vez; limite 1..100 (padrão 20); apos > 0. Filtros ficaram
-// fora (U1): situacao, usuario_id e livro_id também são 400.
+// um no máximo uma vez; limite 1..100 (padrão 20); apos > 0. Em GET /usuarios
+// situacao, usuario_id e livro_id continuam 400; em GET /emprestimos são os
+// filtros da DEL-015 (D-21), aceitos (casos com filtro: true; o detalhe está
+// em TestListarEmprestimosFiltrosParametros).
 func TestListagensNovasParametros(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
 		wantErr    bool
+		filtro     bool // 400 em /usuarios, 200 em /emprestimos
 		wantApos   int64
 		wantLimite int
 	}{
@@ -60,10 +63,10 @@ func TestListagensNovasParametros(t *testing.T) {
 		{name: "apos overflow", query: "apos=9223372036854775808", wantErr: true},
 		{name: "chave desconhecida", query: "x=1", wantErr: true},
 		{name: "cache-buster", query: "_=1", wantErr: true},
-		{name: "filtro situacao fora", query: "situacao=aberto", wantErr: true},
-		{name: "filtro usuario_id fora", query: "usuario_id=2", wantErr: true},
-		{name: "filtro livro_id fora", query: "livro_id=1", wantErr: true},
-		{name: "filtro junto de válidas", query: "limite=5&situacao=vencido", wantErr: true},
+		{name: "filtro situacao", query: "situacao=aberto", filtro: true, wantLimite: 20},
+		{name: "filtro usuario_id", query: "usuario_id=2", filtro: true, wantLimite: 20},
+		{name: "filtro livro_id", query: "livro_id=1", filtro: true, wantLimite: 20},
+		{name: "filtro junto de válidas", query: "limite=5&situacao=vencido", filtro: true, wantLimite: 5},
 		{name: "limite repetido", query: "limite=5&limite=5", wantErr: true},
 		{name: "apos repetido", query: "apos=1&apos=2", wantErr: true},
 		{name: "escape inválido", query: "%zz", wantErr: true},
@@ -78,7 +81,7 @@ func TestListagensNovasParametros(t *testing.T) {
 					path += "?" + tt.query
 				}
 				rec := f.do(http.MethodGet, path, "", true)
-				if tt.wantErr {
+				if tt.wantErr || (tt.filtro && rota.path != "/emprestimos") {
 					msg := checarErro(t, rec, http.StatusBadRequest, "parametro_invalido", true)
 					if msg != msgParametroInvalido {
 						t.Errorf("mensagem = %q, want %q", msg, msgParametroInvalido)
@@ -630,9 +633,9 @@ func TestLogRotasNovasSemQueryNemNome(t *testing.T) {
 }
 
 // FuzzParametrosListagemNovasRotas manda query strings arbitrárias para
-// GET /usuarios e GET /emprestimos com o mesmo oráculo de GET /livros:
-// aceita chega ao repositório com os valores do oráculo; o resto é 400
-// parametro_invalido sem chamar o repositório.
+// GET /usuarios (oráculo de GET /livros) e GET /emprestimos (oráculo com os
+// filtros da DEL-015): aceita chega ao repositório com os valores do
+// oráculo; o resto é 400 parametro_invalido sem chamar o repositório.
 func FuzzParametrosListagemNovasRotas(f *testing.F) {
 	seeds := []string{
 		"", "limite=20", "apos=1", "limite=1&apos=9223372036854775807", "limite=100", "limite=101", "limite=0",
@@ -652,6 +655,13 @@ func FuzzParametrosListagemNovasRotas(f *testing.F) {
 		fx.handler().ServeHTTP(rec, req)
 
 		apos, limite, ok := oraculoListagem(raw)
+		if rota.path == "/emprestimos" {
+			var filtro storage.FiltroEmprestimos
+			filtro, apos, limite, ok = oraculoEmprestimos(raw, false)
+			if ok && !mesmoFiltro(fx.repo.listarEmprFiltro, filtro) {
+				t.Fatalf("%s?%q: filtro %+v, want %+v", rota.path, raw, fx.repo.listarEmprFiltro, filtro)
+			}
+		}
 		if ok {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("%s?%q: status = %d, want 200 (corpo %s)", rota.path, raw, rec.Code, rec.Body.String())

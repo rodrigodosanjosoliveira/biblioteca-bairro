@@ -233,7 +233,7 @@ func TestListarEmprestimos(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, temMais, err := f.repo.ListarEmprestimos(t.Context(), tt.apos, tt.limite)
+			got, temMais, err := f.repo.ListarEmprestimos(t.Context(), FiltroEmprestimos{}, tt.apos, tt.limite)
 			if err != nil {
 				t.Fatalf("ListarEmprestimos(%d, %d): %v", tt.apos, tt.limite, err)
 			}
@@ -271,7 +271,7 @@ func TestListarEmprestimosPercorrerTudo(t *testing.T) {
 				if paginas > len(todos)+2 {
 					t.Fatalf("paginação não termina: %v", visitados)
 				}
-				got, temMais, err := f.repo.ListarEmprestimos(t.Context(), apos, limite)
+				got, temMais, err := f.repo.ListarEmprestimos(t.Context(), FiltroEmprestimos{}, apos, limite)
 				if err != nil {
 					t.Fatalf("ListarEmprestimos(%d, %d): %v", apos, limite, err)
 				}
@@ -316,7 +316,7 @@ func TestListarEmprestimosLinhaInvalida(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, temMais, err := f.repo.ListarEmprestimos(t.Context(), tt.apos, tt.limite)
+			got, temMais, err := f.repo.ListarEmprestimos(t.Context(), FiltroEmprestimos{}, tt.apos, tt.limite)
 			if tt.wantErr {
 				if !errors.Is(err, domain.ErrVencimentoNaoPosteriorAoInicio) {
 					t.Errorf("erro = %v, want %v", err, domain.ErrVencimentoNaoPosteriorAoInicio)
@@ -347,7 +347,7 @@ func TestListagensNovasVazio(t *testing.T) {
 	if us == nil || len(us) != 0 || maisU {
 		t.Errorf("ListarUsuarios = %#v, %v; want [] e false", us, maisU)
 	}
-	es, maisE, err := r.ListarEmprestimos(t.Context(), 0, 20)
+	es, maisE, err := r.ListarEmprestimos(t.Context(), FiltroEmprestimos{}, 0, 20)
 	if err != nil {
 		t.Fatalf("ListarEmprestimos: %v", err)
 	}

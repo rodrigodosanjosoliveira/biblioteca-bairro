@@ -49,7 +49,7 @@ type Repositorio interface {
 	BuscarEmprestimo(ctx context.Context, id int64) (domain.Emprestimo, error)
 	BuscarUsuario(ctx context.Context, id int64) (domain.Usuario, error)
 	ListarUsuarios(ctx context.Context, apos int64, limite int) ([]domain.Usuario, bool, error)
-	ListarEmprestimos(ctx context.Context, apos int64, limite int) ([]domain.Emprestimo, bool, error)
+	ListarEmprestimos(ctx context.Context, f storage.FiltroEmprestimos, apos int64, limite int) ([]domain.Emprestimo, bool, error)
 }
 
 // Pinger verifica a disponibilidade do banco. *pgxpool.Pool o satisfaz.
@@ -145,6 +145,7 @@ func NovoHandler(d Dependencias) http.Handler {
 	mux.Handle("GET /emprestimos/{id}", auth(http.HandlerFunc(a.obterEmprestimo)))
 	mux.Handle("GET /usuarios", auth(http.HandlerFunc(a.listarUsuarios)))
 	mux.Handle("GET /usuarios/{id}", auth(http.HandlerFunc(a.obterUsuario)))
+	mux.Handle("GET /usuarios/{id}/emprestimos", auth(http.HandlerFunc(a.listarEmprestimosDoUsuario)))
 	mux.Handle("GET /emprestimos", auth(http.HandlerFunc(a.listarEmprestimos)))
 
 	return middleware.RequestID(
@@ -424,19 +425,57 @@ func (a *api) obterUsuario(w http.ResponseWriter, r *http.Request) {
 	responder(w, http.StatusOK, saidaUsuario{ID: got.ID, Nome: got.Nome})
 }
 
-// listarEmprestimos lê o relógio uma única vez, antes do repositório, e
-// calcula a multa de todos os itens com esse instante. Erro em qualquer item
-// responde 500 sem página parcial.
+// listarEmprestimos responde GET /emprestimos com os filtros situacao,
+// usuario_id e livro_id (D-21). Filtro por id inexistente é lista vazia, sem
+// consulta de existência.
 func (a *api) listarEmprestimos(w http.ResponseWriter, r *http.Request) {
-	apos, limite, ok := lerParametrosListagem(r.URL.RawQuery)
+	filtro, apos, limite, ok := lerParametrosEmprestimos(r.URL.RawQuery, false)
 	if !ok {
 		falhar(w, r, codParametroInvalido)
 		return
 	}
-	agora := a.agora()
 	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
 	defer cancel()
-	emprestimos, temMais, err := a.repo.ListarEmprestimos(ctx, apos, limite)
+	a.responderPaginaEmprestimos(ctx, w, r, filtro, apos, limite)
+}
+
+// listarEmprestimosDoUsuario responde GET /usuarios/{id}/emprestimos. Ordem
+// dos erros: id_invalido, parametro_invalido, usuario_inexistente (404,
+// conferido em toda página). As duas consultas dividem o mesmo prazo, sem
+// transação.
+func (a *api) listarEmprestimosDoUsuario(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(r.PathValue("id"))
+	if !ok {
+		falhar(w, r, codIDInvalido)
+		return
+	}
+	filtro, apos, limite, ok := lerParametrosEmprestimos(r.URL.RawQuery, true)
+	if !ok {
+		falhar(w, r, codParametroInvalido)
+		return
+	}
+	filtro.UsuarioID = id
+	ctx, cancel := context.WithTimeout(r.Context(), a.timeout)
+	defer cancel()
+	if _, err := a.repo.BuscarUsuario(ctx, id); err != nil {
+		if errors.Is(err, storage.ErrUsuarioNaoEncontrado) {
+			// Mapeamento local, como em obterUsuario.
+			falhar(w, r, codUsuarioInexistente)
+			return
+		}
+		falharErro(w, r, err)
+		return
+	}
+	a.responderPaginaEmprestimos(ctx, w, r, filtro, apos, limite)
+}
+
+// responderPaginaEmprestimos lê o relógio uma única vez, usa o instante como
+// referência do filtro (vencido) e para a multa de todos os itens. Erro em
+// qualquer item responde 500 sem página parcial.
+func (a *api) responderPaginaEmprestimos(ctx context.Context, w http.ResponseWriter, r *http.Request, filtro storage.FiltroEmprestimos, apos int64, limite int) {
+	agora := a.agora()
+	filtro.Ref = agora
+	emprestimos, temMais, err := a.repo.ListarEmprestimos(ctx, filtro, apos, limite)
 	if err != nil {
 		falharErro(w, r, err)
 		return
@@ -608,12 +647,63 @@ func parseID(s string) (int64, bool) {
 // /emprestimos) sem o parâmetro limite.
 const limitePadraoListagem = 20
 
-// lerParametrosListagem valida a query das listagens (GET /livros, /usuarios
-// e /emprestimos): só as chaves limite e apos, cada uma no máximo uma vez.
-// limite é inteiro decimal em 1..storage.LimiteListagem (padrão 20); apos
-// segue a gramática de
+// lerParametrosListagem valida a query de GET /livros e GET /usuarios: só as
+// chaves limite e apos, cada uma no máximo uma vez. limite é inteiro decimal
+// em 1..storage.LimiteListagem (padrão 20); apos segue a gramática de
 // parseID (padrão 0, início). Qualquer desvio devolve ok = false.
 func lerParametrosListagem(rawQuery string) (apos int64, limite int, ok bool) {
+	return lerQueryListagem(rawQuery, func(string, string) (aceita, valido bool) {
+		return false, false
+	})
+}
+
+// lerParametrosEmprestimos valida a query de GET /emprestimos (aninhada =
+// false) e de GET /usuarios/{id}/emprestimos (aninhada = true): limite e apos
+// como em lerParametrosListagem, mais situacao (aberto, devolvido ou vencido,
+// comparação exata), livro_id e, só fora da rota aninhada, usuario_id (ambos
+// pela gramática de parseID). Cada chave no máximo uma vez; qualquer desvio
+// devolve ok = false. O filtro sai sem Ref (o handler preenche).
+func lerParametrosEmprestimos(rawQuery string, aninhada bool) (filtro storage.FiltroEmprestimos, apos int64, limite int, ok bool) {
+	apos, limite, ok = lerQueryListagem(rawQuery, func(k, v string) (aceita, valido bool) {
+		switch k {
+		case "situacao":
+			switch v {
+			case "aberto":
+				filtro.Situacao = storage.SituacaoAberto
+			case "devolvido":
+				filtro.Situacao = storage.SituacaoDevolvido
+			case "vencido":
+				filtro.Situacao = storage.SituacaoVencido
+			default:
+				return true, false
+			}
+			return true, true
+		case "livro_id":
+			n, valido := parseID(v)
+			filtro.LivroID = n
+			return true, valido
+		case "usuario_id":
+			if aninhada {
+				return false, false
+			}
+			n, valido := parseID(v)
+			filtro.UsuarioID = n
+			return true, valido
+		}
+		return false, false
+	})
+	if !ok {
+		return storage.FiltroEmprestimos{}, 0, 0, false
+	}
+	return filtro, apos, limite, true
+}
+
+// lerQueryListagem é o parser comum das listagens: url.ParseQuery com erro
+// tratado, cada chave no máximo uma vez, limite em 1..storage.LimiteListagem
+// (padrão 20) e apos pela gramática de parseID (padrão 0). Outras chaves vão
+// para extra, que diz se a chave é conhecida e se o valor é válido; chave
+// desconhecida ou valor inválido devolve ok = false.
+func lerQueryListagem(rawQuery string, extra func(k, v string) (aceita, valido bool)) (apos int64, limite int, ok bool) {
 	vals, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return 0, 0, false
@@ -637,7 +727,9 @@ func lerParametrosListagem(rawQuery string) (apos int64, limite int, ok bool) {
 			}
 			apos = n
 		default:
-			return 0, 0, false
+			if aceita, valido := extra(k, vs[0]); !aceita || !valido {
+				return 0, 0, false
+			}
 		}
 	}
 	return apos, limite, true

@@ -26,4 +26,5 @@ Status: draft, em revisão, merged, revertida.
 | DEL-011 | Renovação de empréstimo por mais 14 dias, no máximo 2 vezes | merged | 2026-11-06 |
 | DEL-012 | Dockerfile e README de execução da API biblioteca-bairro | merged | 2026-11-06 |
 | DEL-013 | Leituras da API: GET /livros paginado, GET /livros/{id} e GET /emprestimos/{id} | merged | 2026-11-07 |
-| DEL-014 | Listagens paginadas de usuários e de empréstimos e detalhe de usuário por id | em revisão | 2026-11-07 |
+| DEL-014 | Listagens paginadas de usuários e de empréstimos e detalhe de usuário por id | merged | 2026-11-07 |
+| DEL-015 | Filtros de emprestimos por situacao, usuario e livro e GET /usuarios/{id}/emprestimos | em revisão | 2026-11-08 |

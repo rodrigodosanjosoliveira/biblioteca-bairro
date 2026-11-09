@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 	_ "time/tzdata" // embute a base de fusos: a conversão não depende do sistema.
 
@@ -33,8 +34,8 @@ var (
 	// ou adulterado). Nada é gravado.
 	ErrEmprestimoDivergente = errors.New("storage: empréstimo diverge do gravado")
 	// ErrListagemInvalida indica chamada de ListarLivros, ListarUsuarios ou
-	// ListarEmprestimos com apos negativo ou limite fora de
-	// 1..LimiteListagem. É erro de quem chama, não do cliente: a camada HTTP
+	// ListarEmprestimos com apos negativo, limite fora de 1..LimiteListagem
+	// ou FiltroEmprestimos inválido. É erro de quem chama, não do cliente: a camada HTTP
 	// valida antes.
 	ErrListagemInvalida = errors.New("storage: parâmetros de listagem inválidos")
 )
@@ -154,28 +155,107 @@ func (r *Repositorio) ListarUsuarios(ctx context.Context, apos int64, limite int
 		})
 }
 
-// ListarEmprestimos lê até limite empréstimos (abertos e devolvidos) com
-// id > apos, em ordem crescente de id (keyset pela PK), com o mesmo contrato
-// de ListarLivros. Cada linha é reidratada como em BuscarEmprestimo: uma linha
-// gravada inválida derruba a página inteira; a linha extra (+1) não é lida.
-func (r *Repositorio) ListarEmprestimos(ctx context.Context, apos int64, limite int) ([]domain.Emprestimo, bool, error) {
-	return listarPorID(ctx, r.db,
-		`SELECT `+colunasEmprestimo+` FROM emprestimo WHERE id > $1 ORDER BY id LIMIT $2`,
-		apos, limite,
-		func(rows pgx.Rows) (domain.Emprestimo, error) { return lerEmprestimo(rows) })
+// Situacao é o filtro de situação de ListarEmprestimos (D-21).
+type Situacao int
+
+const (
+	// SituacaoTodas não filtra por situação (valor zero).
+	SituacaoTodas Situacao = iota
+	// SituacaoAberto: sem devolução, vencidos incluídos (como
+	// domain.Emprestimo.Aberto).
+	SituacaoAberto
+	// SituacaoDevolvido: com devolução, com ou sem atraso.
+	SituacaoDevolvido
+	// SituacaoVencido: aberto com vencimento antes da data civil de Ref em
+	// America/Sao_Paulo (o dia do vencimento não conta, D-17/D-11).
+	SituacaoVencido
+)
+
+// FiltroEmprestimos restringe ListarEmprestimos. Os critérios se combinam
+// por AND. Zero em UsuarioID ou LivroID significa sem filtro. Ref é o
+// instante de referência de SituacaoVencido (obrigatório só nela).
+type FiltroEmprestimos struct {
+	UsuarioID int64
+	LivroID   int64
+	Situacao  Situacao
+	Ref       time.Time
+}
+
+// valido diz se o filtro pode ir para o SQL.
+func (f FiltroEmprestimos) valido() bool {
+	if f.UsuarioID < 0 || f.LivroID < 0 {
+		return false
+	}
+	if f.Situacao < SituacaoTodas || f.Situacao > SituacaoVencido {
+		return false
+	}
+	return f.Situacao != SituacaoVencido || !f.Ref.IsZero()
+}
+
+// ListarEmprestimos lê até limite empréstimos que atendem f, com id > apos,
+// em ordem crescente de id (keyset), com o mesmo contrato de ListarLivros.
+// Cada linha é reidratada como em BuscarEmprestimo: uma linha gravada
+// inválida derruba a página inteira; a linha extra (+1) não é lida. Recusa,
+// antes de qualquer SQL, filtro inválido (ids negativos, situação
+// desconhecida, vencido sem Ref) com ErrListagemInvalida.
+func (r *Repositorio) ListarEmprestimos(ctx context.Context, f FiltroEmprestimos, apos int64, limite int) ([]domain.Emprestimo, bool, error) {
+	if !f.valido() {
+		return nil, false, ErrListagemInvalida
+	}
+	sql, extra := sqlListarEmprestimos(f)
+	return listarPorID(ctx, r.db, sql, apos, limite,
+		func(rows pgx.Rows) (domain.Emprestimo, error) { return lerEmprestimo(rows) },
+		extra...)
+}
+
+// sqlListarEmprestimos monta o SQL de ListarEmprestimos e os argumentos
+// extras (depois de $1 = apos e $2 = limite+1). O texto só tem fragmentos
+// constantes, em ordem fixa (usuário, livro, situação): cada combinação gera
+// sempre o mesmo texto (cache de prepared statement do pgx) e os valores vão
+// só nos argumentos. Com o filtro zero, o texto é o da listagem sem filtro.
+func sqlListarEmprestimos(f FiltroEmprestimos) (string, []any) {
+	var args []any
+	sql := `SELECT ` + colunasEmprestimo + ` FROM emprestimo WHERE id > $1`
+	proximo := func(v any) string {
+		args = append(args, v)
+		return "$" + strconv.Itoa(len(args)+2)
+	}
+	if f.UsuarioID != 0 {
+		sql += ` AND usuario_id = ` + proximo(f.UsuarioID)
+	}
+	if f.LivroID != 0 {
+		sql += ` AND livro_id = ` + proximo(f.LivroID)
+	}
+	switch f.Situacao {
+	case SituacaoAberto:
+		sql += ` AND devolucao IS NULL`
+	case SituacaoDevolvido:
+		sql += ` AND devolucao IS NOT NULL`
+	case SituacaoVencido:
+		// Tradução de domain.Emprestimo.Renovar/Multa (D-17, D-11): vencido
+		// quando a data civil SP de Ref é posterior à do vencimento. A coluna
+		// guarda vencimentoParaDate(vencimento) e o parâmetro é
+		// vencimentoParaDate(Ref): os dois lados no mesmo espaço (data civil
+		// SP), então vencimento < $hoje equivale à regra do domínio. Nada de
+		// relógio ou fuso da sessão do banco.
+		sql += ` AND devolucao IS NULL AND vencimento < ` + proximo(vencimentoParaDate(f.Ref))
+	}
+	return sql + ` ORDER BY id LIMIT $2`, args
 }
 
 // listarPorID executa sql, uma consulta keyset que recebe ($1 = apos,
-// $2 = limite+1), e lê até limite linhas com ler. A linha a mais só indica
-// que há próxima página e nunca é escaneada. Recusa, antes de qualquer SQL,
-// apos < 0 e limite fora de 1..LimiteListagem com ErrListagemInvalida. Sem
-// linhas, devolve slice vazia (não nil); em erro, nenhuma página parcial.
-func listarPorID[T any](ctx context.Context, db DBTX, sql string, apos int64, limite int, ler func(pgx.Rows) (T, error)) ([]T, bool, error) {
+// $2 = limite+1, depois extra), e lê até limite linhas com ler. A linha a
+// mais só indica que há próxima página e nunca é escaneada. Recusa, antes de
+// qualquer SQL, apos < 0 e limite fora de 1..LimiteListagem com
+// ErrListagemInvalida. Sem linhas, devolve slice vazia (não nil); em erro,
+// nenhuma página parcial.
+func listarPorID[T any](ctx context.Context, db DBTX, sql string, apos int64, limite int, ler func(pgx.Rows) (T, error), extra ...any) ([]T, bool, error) {
 	if apos < 0 || limite < 1 || limite > LimiteListagem {
 		return nil, false, ErrListagemInvalida
 	}
 	// Uma linha a mais só para saber se há próxima página.
-	rows, err := db.Query(ctx, sql, apos, limite+1)
+	args := append([]any{apos, limite + 1}, extra...)
+	rows, err := db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, false, traduzirErro(err)
 	}

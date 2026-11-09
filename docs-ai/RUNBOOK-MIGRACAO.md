@@ -45,6 +45,11 @@ para a menor versão, e na mesma transação de cada down faça
 outros, com o schema sem relações. Down destrutivo segue a D-13: reverter o
 deploy antes e ter `pg_dump`.
 
+Fora do executor não há `lock_timeout`: abra a sessão `psql` com
+`SET lock_timeout = '5s'` antes do `BEGIN`, para que um `DROP` (ACCESS
+EXCLUSIVE) não fique na fila atrás de uma transação longa bloqueando até as
+leituras. Notas por versão na seção 11.
+
 ## 4. Rede e papéis
 
 - DSN direta ao primário. Nunca por pgbouncer em modo transação: quebra o
@@ -84,7 +89,11 @@ deploy antes e ter `pg_dump`.
 - Sem `BEGIN`, `COMMIT`, `ROLLBACK` nem `SAVEPOINT` próprios.
 - A palavra `concurrently` é recusada em qualquer ponto do `.up.sql`, inclusive
   em comentário e literal. Índice em tabela com dados é procedimento manual
-  (`psql` mais registro manual).
+  (`psql` mais registro manual). Única exceção: a 0003
+  (`0003_indices_listagem_emprestimo`), que roda pelo executor por decisão do
+  usuário (U3 da D-21), desde que a tabela `emprestimo` tenha até cerca de 1
+  milhão de linhas, conferidas antes; os passos estão na seção 11. A exceção
+  não vale para outras migrações.
 - Alterar qualquer byte, inclusive comentário, de um `.up.sql` já aplicado
   quebra o checksum (`ErroChecksumDivergente`): a correção é uma migração nova.
 - As regras da D-13 seguem: FK nova `NOT VALID` com `VALIDATE CONSTRAINT` em
@@ -120,3 +129,45 @@ ignorados. Vale para qualquer entrypoint que passe flags ao binário. O
 `Dockerfile` do repositório (DEL-012) usa `ENTRYPOINT ["/biblioteca-bairro"]` em
 forma exec, sem flags nem wrapper de shell; a migração roda na mesma imagem com
 `docker run <imagem> migrate up` (ou `migrate status`), antes de subir a API.
+
+## 11. Notas por versão
+
+### 0003 — `0003_indices_listagem_emprestimo` (DEL-015, D-21)
+
+Três `CREATE INDEX` em `emprestimo` num só arquivo, sem a opção online:
+`emprestimo_usuario_id_id_idx`, `emprestimo_livro_id_id_idx` e
+`emprestimo_aberto_id_idx`. O lock é SHARE: leituras seguem; abrir, devolver e
+renovar (INSERT/UPDATE) esperam até o COMMIT do arquivo. A API dá 5s às
+escritas, então uma construção total acima disso faz essas rotas responderem
+erro. Pior caso teórico: 3 × `statement_timeout` (padrão 60s) com escritas
+bloqueadas.
+
+Antes do `migrate up`:
+
+1. Conferir o tamanho da tabela no primário:
+   `SELECT count(*) FROM emprestimo;` e
+   `SELECT pg_size_pretty(pg_total_relation_size('emprestimo'));`.
+2. **Acima de cerca de 1 milhão de linhas, não usar o executor.** Aplicar a
+   0003 pelo procedimento manual: `psql` fora do executor, com os índices e o
+   `INSERT INTO migracao_aplicada (versao, nome, checksum) VALUES (3,
+   'indices_listagem_emprestimo', '<sha256sum do .up.sql do commit
+   implantado>')`, como no baseline da seção 2.
+3. Até esse limite, rodar em horário de pouco uso.
+4. Conferir que não há autovacuum anti-wraparound em `emprestimo`
+   (`pg_stat_progress_vacuum` e `pg_stat_activity` com
+   `query LIKE 'autovacuum:%wraparound%'`): ele não cede o lock, e o
+   `CREATE INDEX` esperaria até o `lock_timeout` e falharia. Se o `migrate up`
+   falhar por isso, a transação do arquivo foi desfeita por inteiro: espere o
+   vacuum terminar e rode `migrate up` de novo.
+
+Depois: `migrate up`, depois o binário novo. O binário novo funciona sem os
+índices (só mais lento) e o antigo convive com eles: não há acoplamento de
+corretude entre as duas ordens.
+
+Rollback: reverter **só o binário**. O down da 0003 é dispensável, porque o
+binário antigo convive com os índices e o único custo deles é na escrita. Se
+for preciso rodá-lo, só depois de reverter o binário, por `psql` (seção 3):
+`SET lock_timeout = '5s'` antes do `BEGIN`, o `.down.sql` e
+`DELETE FROM migracao_aplicada WHERE versao = 3` na mesma transação. O
+`DROP INDEX` toma ACCESS EXCLUSIVE e bloqueia também as leituras até o COMMIT.
+Não há perda de dado em nenhum sentido.
