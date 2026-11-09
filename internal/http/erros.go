@@ -35,6 +35,10 @@ const (
 
 	codParametroInvalido       = "parametro_invalido"
 	codEmprestimoNaoEncontrado = "emprestimo_nao_encontrado"
+	// codUsuarioInexistente é o 404 de GET /usuarios/{id}, mapeado só no
+	// handler do detalhe; nas rotas de empréstimo o usuário ausente continua
+	// usuario_nao_encontrado (422).
+	codUsuarioInexistente = "usuario_inexistente"
 )
 
 // Valores de "causa" no log de um 500.
@@ -74,6 +78,7 @@ var catalogo = map[string]erroAPI{
 
 	codParametroInvalido:       {http.StatusBadRequest, "parâmetro de consulta inválido"},
 	codEmprestimoNaoEncontrado: {http.StatusNotFound, "empréstimo não encontrado"},
+	codUsuarioInexistente:      {http.StatusNotFound, "usuário não encontrado"},
 }
 
 // falhar responde o código com o status e a mensagem do catálogo. Código fora

@@ -32,14 +32,20 @@ var (
 	// aberto, mas o início difere do lido do banco (valor reidratado à mão
 	// ou adulterado). Nada é gravado.
 	ErrEmprestimoDivergente = errors.New("storage: empréstimo diverge do gravado")
-	// ErrListagemInvalida indica chamada de ListarLivros com apos negativo ou
-	// limite fora de 1..LimiteListagemLivros. É erro de quem chama, não do
-	// cliente: a camada HTTP valida antes.
+	// ErrListagemInvalida indica chamada de ListarLivros, ListarUsuarios ou
+	// ListarEmprestimos com apos negativo ou limite fora de
+	// 1..LimiteListagem. É erro de quem chama, não do cliente: a camada HTTP
+	// valida antes.
 	ErrListagemInvalida = errors.New("storage: parâmetros de listagem inválidos")
 )
 
-// LimiteListagemLivros é o máximo de livros por página de ListarLivros.
-const LimiteListagemLivros = 100
+// LimiteListagem é o máximo de itens por página de ListarLivros,
+// ListarUsuarios e ListarEmprestimos.
+const LimiteListagem = 100
+
+// LimiteListagemLivros é o máximo de livros por página de ListarLivros
+// (igual a LimiteListagem).
+const LimiteListagemLivros = LimiteListagem
 
 // Nomes das constraints mapeadas para sentinelas (migrations/0001).
 const (
@@ -121,35 +127,77 @@ func (r *Repositorio) BuscarLivro(ctx context.Context, id int64) (domain.Livro, 
 // qualquer SQL, apos < 0 e limite fora de 1..LimiteListagemLivros com
 // ErrListagemInvalida.
 func (r *Repositorio) ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error) {
-	if apos < 0 || limite < 1 || limite > LimiteListagemLivros {
+	return listarPorID(ctx, r.db,
+		`SELECT id, titulo FROM livro WHERE id > $1 ORDER BY id LIMIT $2`,
+		apos, limite,
+		func(rows pgx.Rows) (domain.Livro, error) {
+			var l domain.Livro
+			if err := rows.Scan(&l.ID, &l.Titulo); err != nil {
+				return domain.Livro{}, traduzirErro(err)
+			}
+			return l, nil
+		})
+}
+
+// ListarUsuarios lê até limite usuários com id > apos, em ordem crescente de
+// id (keyset pela PK), com o mesmo contrato de ListarLivros.
+func (r *Repositorio) ListarUsuarios(ctx context.Context, apos int64, limite int) ([]domain.Usuario, bool, error) {
+	return listarPorID(ctx, r.db,
+		`SELECT id, nome FROM usuario WHERE id > $1 ORDER BY id LIMIT $2`,
+		apos, limite,
+		func(rows pgx.Rows) (domain.Usuario, error) {
+			var u domain.Usuario
+			if err := rows.Scan(&u.ID, &u.Nome); err != nil {
+				return domain.Usuario{}, traduzirErro(err)
+			}
+			return u, nil
+		})
+}
+
+// ListarEmprestimos lê até limite empréstimos (abertos e devolvidos) com
+// id > apos, em ordem crescente de id (keyset pela PK), com o mesmo contrato
+// de ListarLivros. Cada linha é reidratada como em BuscarEmprestimo: uma linha
+// gravada inválida derruba a página inteira; a linha extra (+1) não é lida.
+func (r *Repositorio) ListarEmprestimos(ctx context.Context, apos int64, limite int) ([]domain.Emprestimo, bool, error) {
+	return listarPorID(ctx, r.db,
+		`SELECT `+colunasEmprestimo+` FROM emprestimo WHERE id > $1 ORDER BY id LIMIT $2`,
+		apos, limite,
+		func(rows pgx.Rows) (domain.Emprestimo, error) { return lerEmprestimo(rows) })
+}
+
+// listarPorID executa sql, uma consulta keyset que recebe ($1 = apos,
+// $2 = limite+1), e lê até limite linhas com ler. A linha a mais só indica
+// que há próxima página e nunca é escaneada. Recusa, antes de qualquer SQL,
+// apos < 0 e limite fora de 1..LimiteListagem com ErrListagemInvalida. Sem
+// linhas, devolve slice vazia (não nil); em erro, nenhuma página parcial.
+func listarPorID[T any](ctx context.Context, db DBTX, sql string, apos int64, limite int, ler func(pgx.Rows) (T, error)) ([]T, bool, error) {
+	if apos < 0 || limite < 1 || limite > LimiteListagem {
 		return nil, false, ErrListagemInvalida
 	}
 	// Uma linha a mais só para saber se há próxima página.
-	rows, err := r.db.Query(ctx,
-		`SELECT id, titulo FROM livro WHERE id > $1 ORDER BY id LIMIT $2`,
-		apos, limite+1)
+	rows, err := db.Query(ctx, sql, apos, limite+1)
 	if err != nil {
 		return nil, false, traduzirErro(err)
 	}
 	defer rows.Close()
-	livros := make([]domain.Livro, 0, limite)
+	itens := make([]T, 0, limite)
 	temMais := false
 	for rows.Next() {
-		if len(livros) == limite {
+		if len(itens) == limite {
 			temMais = true
 			break
 		}
-		var l domain.Livro
-		if err := rows.Scan(&l.ID, &l.Titulo); err != nil {
-			return nil, false, traduzirErro(err)
+		item, err := ler(rows)
+		if err != nil {
+			return nil, false, err
 		}
-		livros = append(livros, l)
+		itens = append(itens, item)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, false, traduzirErro(err)
 	}
-	return livros, temMais, nil
+	return itens, temMais, nil
 }
 
 // InserirUsuario grava u e devolve o usuário com o ID gerado. Recusa, antes

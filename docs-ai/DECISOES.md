@@ -359,8 +359,10 @@ interna, e TLS e HSTS ficam a cargo do proxy. Autenticação completa,
 sem número fixado: a numeração prevista aqui (DEL-007 e DEL-008) foi ocupada
 pela atualização do pipeline-claude e pelo executor de migração (D-16).
 (`GET /emprestimos/{id}`, `GET /livros/{id}` e a listagem paginada de livros
-entraram na DEL-013, D-19; listagens de usuários e de empréstimos continuam
-pendentes.)
+entraram na DEL-013, D-19; as listagens de usuários e de empréstimos e
+`GET /usuarios/{id}` entraram na DEL-014, D-20. Autenticação completa, com
+vários tokens ou usuário final, continua pendente e exige antes a autorização
+por recurso registrada na D-20.)
 Pendência humana H10 (acrescentar `internal/http/` e `internal/config/` a
 `security_surface_paths` no `.pipeline-claude.json`): resolvida na DEL-007.
 
@@ -741,4 +743,92 @@ entre HTTP e storage.
 total, indicação de "emprestado" na listagem, listagens de usuários e de
 empréstimos e `GET /usuarios/{id}` ficam fora até decisão nova. O off-by-one do
 cursor e a ordem só são pegos com banco: o CI precisa continuar rodando com
-PostgreSQL e `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`.
+PostgreSQL e `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`. (As listagens de usuários e de
+empréstimos e `GET /usuarios/{id}` entraram na DEL-014, D-20; filtros, busca,
+ordenação, total e "emprestado" na listagem continuam fora.)
+
+## D-20 — Listagens de usuários e de empréstimos e detalhe de usuário, no contrato da D-19
+
+Decisões do `pm-triage`, do `architecture-guardrails` e do usuário (U1, U2) na
+DEL-014. Decisão própria, e não extensão da D-19, porque traz decisões do
+usuário, um código de erro novo e um risco de exposição de dado pessoal que a
+D-19 não tinha; a D-19 continua descrevendo o contrato, que aqui é reaproveitado
+sem variação. Nenhuma rota, código, mensagem ou DTO existente muda.
+
+**Rotas.** Todas atrás do mesmo `auth(...)`, com `context.WithTimeout` por
+operação:
+
+- `GET /usuarios`: listagem paginada; item `{id, nome}`, o mesmo DTO de
+  `POST /usuarios`.
+- `GET /usuarios/{id}`: detalhe do usuário, mesmo DTO; ignora a query string,
+  como as rotas de detalhe da D-19.
+- `GET /emprestimos`: listagem paginada; item igual ao DTO de
+  `GET /emprestimos/{id}` (com `renovacoes` e multa), sem `JOIN` nem título ou
+  nome embutidos. O relógio injetado é lido **uma vez por requisição**, antes
+  da consulta, e todos os itens usam esse instante (aberto usa `ref`, devolvido
+  o ignora, D-14). Erro de reidratação ou de multa em qualquer item responde
+  500 para a página inteira, sem item pulado nem resposta parcial.
+
+**Paginação.** O mesmo contrato da D-19, sem variação: só `limite` (1..100,
+padrão 20, 400 sem clamp) e `apos` (gramática do `parseID`); ordem por `id`
+ascendente; resposta `{"itens":[...],"proximo":<id>|null}`; sem total,
+`OFFSET` nem `COUNT`; chave desconhecida ou repetida, escape inválido e `;` →
+400 `parametro_invalido`. SQL keyset pela PK, parametrizado, com
+`LIMIT limite+1`: `SELECT id, nome FROM usuario WHERE id > $1 ORDER BY id
+LIMIT $2` (`usuario_pkey`) e `SELECT <colunas> FROM emprestimo WHERE id > $1
+ORDER BY id LIMIT $2` (`emprestimo_pkey`). Uma consulta por página, sem N+1;
+sem índice nem migração.
+
+**Teto compartilhado.** Nova constante exportada `storage.LimiteListagem = 100`,
+usada pelas três listagens e pelo handler; `LimiteListagemLivros` continua
+exportada como `= LimiteListagem`. A revalidação (`apos >= 0`,
+`1 <= limite <= LimiteListagem`, `storage.ErrListagemInvalida` → 500
+`bug_interno`) e o `+1` ficam no helper genérico não exportado `listarPorID`,
+para o qual `ListarLivros` passou a delegar sem mudança observável. A linha
+extra nunca é escaneada.
+
+**Código novo (catálogo da D-15).** `usuario_inexistente` 404 ("usuário não
+encontrado"), só em `GET /usuarios/{id}`, mapeado localmente no handler. Não se
+reaproveitou `usuario_nao_encontrado` porque ele já é 422 e o catálogo associa
+um status por código; `classificar()` continua levando
+`storage.ErrUsuarioNaoEncontrado` a `usuario_nao_encontrado` 422 nas rotas de
+empréstimo. Mesmo precedente de `emprestimo_nao_encontrado` (D-19).
+
+**Decisões do usuário.**
+
+- U1: filtros em `GET /emprestimos` (situação aberto/devolvido/vencido,
+  `usuario_id`, `livro_id`) e `GET /usuarios/{id}/emprestimos` ficam para
+  depois, em delivery própria com índice composto ou parcial, `data-model` e
+  `migration-reviewer`. Nesta entrega, nenhuma migração; essas chaves dão 400.
+- U2: o nome em lote em `GET /usuarios` foi aceito no modelo de token único e
+  operador único (D-15, D-17, D-19).
+
+**Riscos aceitos.**
+
+- MEDIO (U2): exposição em lote de dado pessoal. Com o token, `GET /usuarios`
+  percorre todos os nomes (único dado pessoal, D-12) e `GET /emprestimos` todo o
+  histórico (`livro_id`, `usuario_id`, datas, multa), cruzáveis por
+  `usuario_id`; o vazamento do token passa a valer extração completa em cerca
+  de N/100 requisições, sem rate limit nem log de volume por cliente.
+  **Condição de bloqueio:** com vários tokens ou login de usuário final, as
+  três rotas (`GET /usuarios`, `GET /usuarios/{id}` e `GET /emprestimos`)
+  exigem autorização por recurso **antes** dessa mudança.
+- BAIXO: uma página de usuários pode ter cerca de 6 MB (nome sem teto além do
+  corpo de 64 KiB), o mesmo risco aceito na D-19 para títulos.
+- BAIXO: uma linha de `emprestimo` inconsistente (vencimento <= início ou
+  devolução < início, sem CHECK no banco) dá 500 permanente na página que a
+  contém, até a correção do dado; fail-closed, sem vazamento, contornável com
+  `apos`. Como linha extra (+1) ela não é escaneada e não derruba a página
+  anterior.
+- BAIXO, informativo: 404 `usuario_inexistente` contra 200 confirma a
+  existência de um id, o que a listagem autenticada já revela.
+
+**Motivo:** reaproveitar o contrato da D-19 sem variação mantém um só
+comportamento para todas as listagens; teto e validação num só lugar evitam
+divergência; instante único deixa a página coerente; fail-closed na
+reidratação segue `GET /emprestimos/{id}`.
+
+**Consequências:** filtros e `GET /usuarios/{id}/emprestimos` (U1), busca por
+nome, ordenação configurável, total e rate limit ficam para deliveries
+futuras. O off-by-one e a ordem das consultas novas só são pegos com banco: o
+CI precisa continuar com `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`.
