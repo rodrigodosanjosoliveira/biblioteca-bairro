@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "toolkit_version": "v1.1.0",
+  "toolkit_version": "v1.2.1",
   "files": {
     ".claude/agents/architecture-guardrails.md": "ca2ec74931e49125a16f832a37ea15bfe6064647be69fb60d4524ebb9bb18a71",
     ".claude/agents/code-reviewer.md": "fd043a812e60ad9b66d00c63c74e2d27eb27e2eb50d45ff3f64230381d017387",
