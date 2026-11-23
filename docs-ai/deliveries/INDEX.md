@@ -29,3 +29,4 @@ Status: draft, em revisão, merged, revertida.
 | DEL-014 | Listagens paginadas de usuários e de empréstimos e detalhe de usuário por id | merged | 2026-11-07 |
 | DEL-015 | Filtros de emprestimos por situacao, usuario e livro e GET /usuarios/{id}/emprestimos | merged | 2026-11-08 |
 | DEL-016 | Coleção e environment do Postman com todos os endpoints da API | merged | 2026-11-09 |
+| DEL-017 | Contagem de exemplares disponíveis por livro | em revisão | 2026-11-23 |

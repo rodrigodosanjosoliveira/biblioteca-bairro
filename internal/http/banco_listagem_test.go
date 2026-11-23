@@ -108,9 +108,9 @@ func TestBancoDetalhes(t *testing.T) {
 	uid := idDe(t, exigirStatus(t, chamar(h, http.MethodPost, "/usuarios", `{"nome":"Capitu"}`), 201))
 
 	livro := exigirStatus(t, chamar(h, http.MethodGet, "/livros/"+lid, ""), 200)
-	exigirChaves(t, livro, "id", "titulo")
-	if idDe(t, livro) != lid || livro["titulo"] != "Dom Casmurro" {
-		t.Errorf("livro = %v, want id %s e titulo aparado", livro, lid)
+	exigirChaves(t, livro, "id", "titulo", "disponivel")
+	if idDe(t, livro) != lid || livro["titulo"] != "Dom Casmurro" || livro["disponivel"] != true {
+		t.Errorf("livro = %v, want id %s, titulo aparado e disponivel true", livro, lid)
 	}
 	checarErro(t, chamar(h, http.MethodGet, "/livros/999999", ""), http.StatusNotFound, "livro_nao_encontrado", true)
 

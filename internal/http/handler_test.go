@@ -173,6 +173,11 @@ func TestContratoSaidaLivroEUsuario(t *testing.T) {
 			checarCabecalhos(t, rec, true)
 			m := objetoJSON(t, rec.Body.Bytes())
 			exigirChaves(t, m, tt.chaves...)
+			// DEL-017: POST /livros fica {id, titulo}; disponivel é só das
+			// leituras (GET /livros e GET /livros/{id}).
+			if strings.Contains(rec.Body.String(), "disponivel") {
+				t.Errorf("corpo = %s, want sem a chave disponivel", rec.Body.String())
+			}
 			for k, v := range tt.want {
 				if m[k] != v {
 					t.Errorf("%s = %#v, want %#v", k, m[k], v)

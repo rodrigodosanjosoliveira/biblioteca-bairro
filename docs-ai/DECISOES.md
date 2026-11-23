@@ -746,7 +746,9 @@ empréstimos e `GET /usuarios/{id}` ficam fora até decisão nova. O off-by-one 
 cursor e a ordem só são pegos com banco: o CI precisa continuar rodando com
 PostgreSQL e `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`. (As listagens de usuários e de
 empréstimos e `GET /usuarios/{id}` entraram na DEL-014, D-20; filtros, busca,
-ordenação, total e "emprestado" na listagem continuam fora.)
+ordenação, total e "emprestado" na listagem continuam fora.) (A indicação de
+"emprestado" entrou na DEL-017 como `disponivel`, e `GET /livros/{id}` deixou
+de usar o DTO de `POST /livros`: D-23.)
 
 ## D-20 — Listagens de usuários e de empréstimos e detalhe de usuário, no contrato da D-19
 
@@ -1054,3 +1056,90 @@ segredo (invariante 5) e sem virar uma segunda suíte de testes.
 delivery. Ela não roda no CI (Newman fica fora). O `.gitignore` só protege a
 cópia com o nome `.local`; token gravado no arquivo versionado continua sendo
 barrado só pela revisão.
+
+## D-23 — Disponibilidade por livro (`disponivel`) em `GET /livros` e `GET /livros/{id}`, derivada na consulta
+
+Decisões do usuário, do `pm-triage` e do `architecture-guardrails` na DEL-017
+(PROJ-7).
+
+**Decisões do usuário (23/11/2026).**
+
+- P1 = A: o modelo atual fica (D-12: cada linha de `livro` é um exemplar
+  físico). Sem tabela `exemplar`, sem coluna de quantidade e sem migração. As
+  opções B (tabela `exemplar`) e C (coluna `livro.quantidade`) foram
+  descartadas. O campo exposto é `disponivel` (bool), sem contagem numérica.
+- P4: disponível = não existe empréstimo com `devolucao IS NULL` para o livro.
+  Vencido e não devolvido conta como indisponível, então o valor não depende do
+  relógio (D-14, D-15).
+- P2 e P3 nos padrões: `disponivel` em `GET /livros/{id}` e em cada item de
+  `GET /livros`, sem rota nova; calculado na consulta, uma consulta por página
+  e por detalhe (sem N+1), sem valor gravado.
+
+**Estado derivado, fora do domínio.** `disponivel` é estado derivado de
+empréstimo aberto (D-12), calculado na própria consulta SQL e nunca gravado.
+Não entra em `domain.Livro`: o storage devolve o tipo de leitura
+`storage.LivroComDisponibilidade{Livro domain.Livro; Disponivel bool}` (campo
+nomeado, sem embedding) em `BuscarLivro` e `ListarLivros`. O helper
+`listarPorID` (D-20) não muda.
+
+**Forma do SQL (F1).** As consts `sqlListarLivros` e `sqlBuscarLivro` têm
+`FROM livro l` e a projeção
+
+```sql
+(SELECT 1 FROM emprestimo e WHERE e.livro_id = l.id AND e.devolucao IS NULL LIMIT 1) IS NULL AS disponivel
+```
+
+Não se usa `NOT EXISTS`: medido no PostgreSQL 16 do CI, o `NOT EXISTS` virava
+hashed SubPlan na listagem, que lê todos os empréstimos abertos por página
+(O(abertos)). A subconsulta escalar com `LIMIT 1 ... IS NULL` faz uma sonda por
+livro em `emprestimo_livro_aberto_uq` (R4, D-13), no máximo 101 por página e
+uma no detalhe. O `LIMIT limite+1` da D-19 continua contando livros, sem JOIN
+que duplique ou omita itens. Texto constante e parametrizado (D-21), sem
+`now()`, COALESCE, JOIN, LATERAL ou agregação. Barreiras: `TestPlanoLeituraLivro`
+(EXPLAIN genérico e custom das consts reais, proibindo hashed SubPlan, Seq Scan
+e Bitmap), `TestSQLLeituraLivro` (texto) e `TestLeituraLivroUmaConsulta` (uma
+consulta por requisição). Leitura sem lock, com coerência por statement: uma
+leitura concorrente com abertura ou devolução pode refletir o estado
+imediatamente anterior. Sem migração nem índice novo.
+
+**Contrato HTTP.** DTO de leitura novo `saidaLivroLido {id, titulo,
+disponivel}`, com `disponivel` bool sem ponteiro e sem `omitempty` (o `false`
+sai sempre no JSON), usado em `GET /livros/{id}` e nos itens de `GET /livros`.
+`POST /livros` fica inalterado: `saidaLivro {id, titulo}`. Não há filtro nem
+ordenação por disponibilidade: `?disponivel=` continua 400
+`parametro_invalido`. O campo é aditivo e quebra cliente com decodificação
+estrita, como o precedente da D-17. A coleção Postman foi atualizada na mesma
+delivery (D-22).
+
+**Revisão da D-19 em dois pontos.**
+
+- A indicação de "emprestado" na listagem, que a D-19 deixava fora, entra como
+  `disponivel`.
+- `GET /livros/{id}` deixa de usar o mesmo DTO de `POST /livros`: passa a
+  `saidaLivroLido`. Paginação keyset, `limite`, `apos`, `proximo` e ordem por
+  `id` ficam como na D-19.
+
+**Riscos aceitos.**
+
+- BAIXO, informativo (security-review da DEL-017): `GET /livros` passa a
+  revelar em lote o estado "emprestado" de todo o acervo, e `GET /livros/{id}`
+  o de um livro. A saída é só `{id, titulo, disponivel}`, sem `usuario_id`,
+  datas, vencimento nem multa, e as rotas seguem atrás do mesmo `auth(...)`.
+  É subconjunto do que `GET /emprestimos?situacao=aberto` e `?livro_id=`
+  (D-21) já revelam a quem tem o token, dentro do modelo de token único e
+  operador único (D-15, D-19, D-21). **Condição de reavaliação** (estende a
+  condição de bloqueio da D-21): se surgirem vários tokens ou login de usuário
+  final (por exemplo, leitor com credencial própria e escopo só de catálogo),
+  `disponivel` em `GET /livros` deve ser reavaliado antes dessa mudança, pois
+  um perfil de catálogo passaria a ver estado de circulação.
+- O plano é escolha de custo do PG16; `TestPlanoLeituraLivro` é a barreira
+  contra mudança em versão futura do PostgreSQL.
+
+**Motivo:** um bool derivado na mesma consulta atende "o livro está na
+estante?" sem mudar o modelo, sem migração e sem N+1; o tipo de leitura mantém
+o domínio livre de estado de circulação; a forma F1 garante custo O(página).
+
+**Consequências:** contagem de exemplares, tabela `exemplar`, filtro ou
+ordenação por disponibilidade e reserva/fila ficam para deliveries futuras. A
+disponibilidade e o plano só são exercitados com banco: o CI precisa continuar
+com PostgreSQL e `BIBLIOTECA_TEST_DB_OBRIGATORIO=1`.

@@ -174,17 +174,42 @@ func logEstavel(t testing.TB, f *fixture) string {
 }
 
 // livros monta livros com os ids dados e títulos "L<id>".
-func livros(ids ...int64) []domain.Livro {
-	out := make([]domain.Livro, 0, len(ids))
+// livros monta a página do repositório: título "L<id>" e disponível só com
+// id ímpar (DEL-017), para os vizinhos alternarem.
+func livros(ids ...int64) []storage.LivroComDisponibilidade {
+	out := make([]storage.LivroComDisponibilidade, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, domain.Livro{ID: id, Titulo: fmt.Sprintf("L%d", id)})
+		out = append(out, storage.LivroComDisponibilidade{
+			Livro:      domain.Livro{ID: id, Titulo: fmt.Sprintf("L%d", id)},
+			Disponivel: id%2 == 1,
+		})
+	}
+	return out
+}
+
+// disponiveisJSON devolve o disponivel de cada item de uma página de GET
+// /livros, exigindo bool JSON (nunca ausente, null nem string).
+func disponiveisJSON(t testing.TB, body []byte) []bool {
+	t.Helper()
+	itens, ok := objetoJSON(t, body)["itens"].([]any)
+	if !ok {
+		t.Fatalf("itens ausente ou não array: %s", body)
+	}
+	out := make([]bool, 0, len(itens))
+	for i, it := range itens {
+		o, _ := it.(map[string]any)
+		b, ok := o["disponivel"].(bool)
+		if !ok {
+			t.Fatalf("itens[%d].disponivel = %#v, want bool", i, o["disponivel"])
+		}
+		out = append(out, b)
 	}
 	return out
 }
 
 // listaJSON decodifica {"itens":[...],"proximo":...} exigindo exatamente
-// essas chaves, itens sempre array de objetos {id, titulo} e proximo número
-// ou null ("" para null).
+// essas chaves, itens sempre array de objetos {id, titulo, disponivel}
+// (disponivel bool, DEL-017) e proximo número ou null ("" para null).
 func listaJSON(t testing.TB, body []byte) (ids []string, titulos []string, proximo string) {
 	t.Helper()
 	m := objetoJSON(t, body)
@@ -198,10 +223,13 @@ func listaJSON(t testing.TB, body []byte) (ids []string, titulos []string, proxi
 		if !ok {
 			t.Fatalf("itens[%d] = %#v, want objeto", i, it)
 		}
-		exigirChaves(t, o, "id", "titulo")
+		exigirChaves(t, o, "id", "titulo", "disponivel")
 		n, ok := o["id"].(json.Number)
 		if !ok {
 			t.Fatalf("itens[%d].id = %#v, want número", i, o["id"])
+		}
+		if _, ok := o["disponivel"].(bool); !ok {
+			t.Fatalf("itens[%d].disponivel = %#v, want bool", i, o["disponivel"])
 		}
 		s, ok := o["titulo"].(string)
 		if !ok {
@@ -228,13 +256,13 @@ func TestListarLivrosContrato(t *testing.T) {
 	tests := []struct {
 		name        string
 		query       string
-		ret         []domain.Livro
+		ret         []storage.LivroComDisponibilidade
 		temMais     bool
 		wantIDs     string
 		wantProximo string // "" = null
 	}{
 		{name: "vazio (nil do repositório)", ret: nil, wantIDs: "", wantProximo: ""},
-		{name: "vazio (slice vazia)", ret: []domain.Livro{}, wantIDs: "", wantProximo: ""},
+		{name: "vazio (slice vazia)", ret: []storage.LivroComDisponibilidade{}, wantIDs: "", wantProximo: ""},
 		{name: "página única sem mais", ret: livros(4, 9, 15), wantIDs: "4,9,15", wantProximo: ""},
 		{name: "página com mais", query: "limite=3", ret: livros(4, 9, 15), temMais: true, wantIDs: "4,9,15", wantProximo: "15"},
 		{name: "página com mais depois de apos", query: "limite=2&apos=9", ret: livros(15, 23), temMais: true, wantIDs: "15,23", wantProximo: "23"},
@@ -258,9 +286,13 @@ func TestListarLivrosContrato(t *testing.T) {
 			if got := strings.Join(ids, ","); got != tt.wantIDs {
 				t.Errorf("ids = %s, want %s", got, tt.wantIDs)
 			}
+			disp := disponiveisJSON(t, rec.Body.Bytes())
 			for i, id := range ids {
 				if titulos[i] != "L"+id {
 					t.Errorf("titulo de %s = %q, want %q", id, titulos[i], "L"+id)
+				}
+				if want := tt.ret[i].Disponivel; disp[i] != want {
+					t.Errorf("disponivel de %s = %v, want %v", id, disp[i], want)
 				}
 			}
 			if proximo != tt.wantProximo {
@@ -411,20 +443,119 @@ func TestDetalheParametroID(t *testing.T) {
 	}
 }
 
-// GET /livros/{id} responde exatamente {id, titulo} com o livro do
-// repositório.
+// GET /livros/{id} responde exatamente {id, titulo, disponivel} com o livro
+// do repositório (CA1, DEL-017): disponivel é bool JSON, presente também
+// quando false, e não depende do relógio do handler.
 func TestContratoSaidaDetalheLivro(t *testing.T) {
-	f := novaFixture(t)
-	f.repo.livroRet = &domain.Livro{ID: 12, Titulo: "Memórias Póstumas"}
-	rec := f.do(http.MethodGet, "/livros/12", "", true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (corpo %s)", rec.Code, rec.Body.String())
+	tests := []struct {
+		name       string
+		disponivel bool
+		agora      time.Time
+		wantTrecho string
+	}{
+		{name: "disponível", disponivel: true, agora: time.Date(2026, 3, 12, 9, 0, 0, 0, sp), wantTrecho: `"disponivel":true`},
+		{name: "indisponível (false presente)", disponivel: false, agora: time.Date(2026, 3, 12, 9, 0, 0, 0, sp), wantTrecho: `"disponivel":false`},
+		{name: "relógio zerado não importa", disponivel: false, agora: time.Time{}, wantTrecho: `"disponivel":false`},
 	}
-	checarCabecalhos(t, rec, true)
-	m := objetoJSON(t, rec.Body.Bytes())
-	exigirChaves(t, m, "id", "titulo")
-	if m["id"] != json.Number("12") || m["titulo"] != "Memórias Póstumas" {
-		t.Errorf("livro = %v, want id 12 e titulo Memórias Póstumas", m)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := novaFixture(t)
+			f.agora = tt.agora
+			f.repo.livroRet = &storage.LivroComDisponibilidade{
+				Livro:      domain.Livro{ID: 12, Titulo: "Memórias Póstumas"},
+				Disponivel: tt.disponivel,
+			}
+			rec := f.do(http.MethodGet, "/livros/12", "", true)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (corpo %s)", rec.Code, rec.Body.String())
+			}
+			checarCabecalhos(t, rec, true)
+			m := objetoJSON(t, rec.Body.Bytes())
+			exigirChaves(t, m, "id", "titulo", "disponivel")
+			if m["id"] != json.Number("12") || m["titulo"] != "Memórias Póstumas" {
+				t.Errorf("livro = %v, want id 12 e titulo Memórias Póstumas", m)
+			}
+			if got, ok := m["disponivel"].(bool); !ok || got != tt.disponivel {
+				t.Errorf("disponivel = %#v, want bool %v", m["disponivel"], tt.disponivel)
+			}
+			if !strings.Contains(rec.Body.String(), tt.wantTrecho) {
+				t.Errorf("corpo = %s, want %s", rec.Body.String(), tt.wantTrecho)
+			}
+			if got := strings.Join(f.repo.chamadas, ","); got != "BuscarLivro" {
+				t.Errorf("chamadas = %s, want BuscarLivro (uma consulta)", got)
+			}
+		})
+	}
+}
+
+// GET /livros (CA2, DEL-017): cada item leva o próprio disponivel (bool,
+// false explícito), em página só de disponíveis, só de indisponíveis e
+// mista; o handler não consulta nada além de ListarLivros nem lê o relógio.
+func TestListarLivrosDisponivel(t *testing.T) {
+	ld := func(id int64, d bool) storage.LivroComDisponibilidade {
+		return storage.LivroComDisponibilidade{Livro: domain.Livro{ID: id, Titulo: fmt.Sprintf("L%d", id)}, Disponivel: d}
+	}
+	tests := []struct {
+		name    string
+		ret     []storage.LivroComDisponibilidade
+		temMais bool
+		semHora bool // relógio do handler zerado
+		want    []bool
+	}{
+		{name: "todos disponíveis", ret: []storage.LivroComDisponibilidade{ld(1, true), ld(2, true)}, want: []bool{true, true}},
+		{name: "todos indisponíveis", ret: []storage.LivroComDisponibilidade{ld(1, false), ld(2, false)}, want: []bool{false, false}},
+		{name: "mista", ret: []storage.LivroComDisponibilidade{ld(3, false), ld(5, true), ld(8, false), ld(13, true), ld(21, true)}, temMais: true, want: []bool{false, true, false, true, true}},
+		{name: "um item indisponível", ret: []storage.LivroComDisponibilidade{ld(7, false)}, want: []bool{false}},
+		{name: "relógio zerado não importa", ret: []storage.LivroComDisponibilidade{ld(1, false), ld(2, true)}, semHora: true, want: []bool{false, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := novaFixture(t)
+			if tt.semHora {
+				f.agora = time.Time{}
+			}
+			f.repo.listarRet, f.repo.listarTemMais = tt.ret, tt.temMais
+			rec := f.do(http.MethodGet, "/livros", "", true)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (corpo %s)", rec.Code, rec.Body.String())
+			}
+			ids, _, proximo := listaJSON(t, rec.Body.Bytes())
+			if len(ids) != len(tt.want) {
+				t.Fatalf("%d itens, want %d", len(ids), len(tt.want))
+			}
+			if got := disponiveisJSON(t, rec.Body.Bytes()); fmt.Sprint(got) != fmt.Sprint(tt.want) {
+				t.Errorf("disponivel = %v, want %v", got, tt.want)
+			}
+			wantFalse := strings.Count(fmt.Sprint(tt.want), "false")
+			if got := strings.Count(rec.Body.String(), `"disponivel":false`); got != wantFalse {
+				t.Errorf("%d ocorrências de \"disponivel\":false, want %d (corpo %s)", got, wantFalse, rec.Body.String())
+			}
+			wantProx := ""
+			if tt.temMais {
+				wantProx = fmt.Sprint(tt.ret[len(tt.ret)-1].Livro.ID)
+			}
+			if proximo != wantProx {
+				t.Errorf("proximo = %q, want %q", proximo, wantProx)
+			}
+			if got := strings.Join(f.repo.chamadas, ","); got != "ListarLivros" {
+				t.Errorf("chamadas = %s, want ListarLivros (uma consulta)", got)
+			}
+		})
+	}
+}
+
+// GET /livros não ganha filtro (DEL-017, NAO_FAZER): disponivel na query
+// continua 400 parametro_invalido sem chamar o repositório.
+func TestListarLivrosSemFiltroDisponivel(t *testing.T) {
+	for _, q := range []string{"disponivel=true", "disponivel=false", "limite=5&disponivel=1", "disponivel"} {
+		t.Run(q, func(t *testing.T) {
+			f := novaFixture(t)
+			rec := f.do(http.MethodGet, "/livros?"+q, "", true)
+			checarErro(t, rec, http.StatusBadRequest, "parametro_invalido", true)
+			if f.repo.nChamadas() != 0 {
+				t.Errorf("repositório chamado: %v", f.repo.chamadas)
+			}
+		})
 	}
 }
 

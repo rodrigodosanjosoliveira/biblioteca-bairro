@@ -44,8 +44,8 @@ type Repositorio interface {
 	BuscarEmprestimoAbertoPorLivro(ctx context.Context, livroID int64) (domain.Emprestimo, error)
 	RegistrarDevolucao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error)
 	RegistrarRenovacao(ctx context.Context, e domain.Emprestimo) (domain.Emprestimo, error)
-	BuscarLivro(ctx context.Context, id int64) (domain.Livro, error)
-	ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error)
+	BuscarLivro(ctx context.Context, id int64) (storage.LivroComDisponibilidade, error)
+	ListarLivros(ctx context.Context, apos int64, limite int) ([]storage.LivroComDisponibilidade, bool, error)
 	BuscarEmprestimo(ctx context.Context, id int64) (domain.Emprestimo, error)
 	BuscarUsuario(ctx context.Context, id int64) (domain.Usuario, error)
 	ListarUsuarios(ctx context.Context, apos int64, limite int) ([]domain.Usuario, bool, error)
@@ -222,6 +222,19 @@ type saidaLivro struct {
 	Titulo string `json:"titulo"`
 }
 
+// saidaLivroLido é o livro em GET /livros e GET /livros/{id} (D-23).
+// Disponivel é bool puro, sem omitempty: o false precisa sair no JSON.
+// POST /livros continua com saidaLivro.
+type saidaLivroLido struct {
+	ID         int64  `json:"id"`
+	Titulo     string `json:"titulo"`
+	Disponivel bool   `json:"disponivel"`
+}
+
+func novaSaidaLivroLido(l storage.LivroComDisponibilidade) saidaLivroLido {
+	return saidaLivroLido{ID: l.Livro.ID, Titulo: l.Livro.Titulo, Disponivel: l.Disponivel}
+}
+
 type saidaUsuario struct {
 	ID   int64  `json:"id"`
 	Nome string `json:"nome"`
@@ -230,8 +243,8 @@ type saidaUsuario struct {
 // saidaListaLivros é uma página de GET /livros. Proximo é o valor de apos
 // para a página seguinte (id do último item), null na última página.
 type saidaListaLivros struct {
-	Itens   []saidaLivro `json:"itens"`
-	Proximo *int64       `json:"proximo"`
+	Itens   []saidaLivroLido `json:"itens"`
+	Proximo *int64           `json:"proximo"`
 }
 
 // saidaListaUsuarios é uma página de GET /usuarios, no contrato de
@@ -368,12 +381,12 @@ func (a *api) listarLivros(w http.ResponseWriter, r *http.Request) {
 		falharErro(w, r, err)
 		return
 	}
-	out := saidaListaLivros{Itens: make([]saidaLivro, 0, len(livros))}
+	out := saidaListaLivros{Itens: make([]saidaLivroLido, 0, len(livros))}
 	for _, l := range livros {
-		out.Itens = append(out.Itens, saidaLivro{ID: l.ID, Titulo: l.Titulo})
+		out.Itens = append(out.Itens, novaSaidaLivroLido(l))
 	}
 	if temMais && len(livros) > 0 {
-		p := livros[len(livros)-1].ID
+		p := livros[len(livros)-1].Livro.ID
 		out.Proximo = &p
 	}
 	responder(w, http.StatusOK, out)
@@ -509,7 +522,7 @@ func (a *api) obterLivro(w http.ResponseWriter, r *http.Request) {
 		falharErro(w, r, err)
 		return
 	}
-	responder(w, http.StatusOK, saidaLivro{ID: got.ID, Titulo: got.Titulo})
+	responder(w, http.StatusOK, novaSaidaLivroLido(got))
 }
 
 func (a *api) obterEmprestimo(w http.ResponseWriter, r *http.Request) {

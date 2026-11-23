@@ -77,21 +77,26 @@ func fixturePlano(t *testing.T) *pgx.Conn {
 	return c
 }
 
-// noPlano é um nó do EXPLAIN (FORMAT JSON).
+// noPlano é um nó do EXPLAIN (FORMAT JSON). ParentRelationship, SubplanName
+// e Output (este só com VERBOSE) servem ao plano de livros da DEL-017, que
+// distingue SubPlan correlacionado de hashed SubPlan.
 type noPlano struct {
-	NodeType     string    `json:"Node Type"`
-	RelationName string    `json:"Relation Name"`
-	IndexName    string    `json:"Index Name"`
-	IndexCond    string    `json:"Index Cond"`
-	Filter       string    `json:"Filter"`
-	Plans        []noPlano `json:"Plans"`
+	NodeType           string    `json:"Node Type"`
+	ParentRelationship string    `json:"Parent Relationship"`
+	SubplanName        string    `json:"Subplan Name"`
+	RelationName       string    `json:"Relation Name"`
+	IndexName          string    `json:"Index Name"`
+	IndexCond          string    `json:"Index Cond"`
+	Filter             string    `json:"Filter"`
+	Output             []string  `json:"Output"`
+	Plans              []noPlano `json:"Plans"`
 }
 
 func (n noPlano) String() string {
 	var b strings.Builder
 	var rec func(n noPlano, nivel int)
 	rec = func(n noPlano, nivel int) {
-		fmt.Fprintf(&b, "%s%s %s %s cond=%q filter=%q\n", strings.Repeat("  ", nivel), n.NodeType, n.RelationName, n.IndexName, n.IndexCond, n.Filter)
+		fmt.Fprintf(&b, "%s%s %s %s %s cond=%q filter=%q out=%q\n", strings.Repeat("  ", nivel), n.NodeType, n.SubplanName, n.RelationName, n.IndexName, n.IndexCond, n.Filter, n.Output)
 		for _, f := range n.Plans {
 			rec(f, nivel+1)
 		}

@@ -81,10 +81,10 @@ type repoFake struct {
 	renovarRecebido   domain.Emprestimo
 
 	// Leituras da DEL-013. Sem retorno configurado: BuscarLivro devolve o
-	// livro {id, "Dom Casmurro"}, ListarLivros devolve nil e false e
-	// BuscarEmprestimo devolve buscarRet.
-	livroRet        *domain.Livro
-	listarRet       []domain.Livro
+	// livro {id, "Dom Casmurro"} disponível (DEL-017), ListarLivros devolve
+	// nil e false e BuscarEmprestimo devolve buscarRet.
+	livroRet        *storage.LivroComDisponibilidade
+	listarRet       []storage.LivroComDisponibilidade
 	listarTemMais   bool
 	buscarEmprRet   *domain.Emprestimo
 	livroIDRecebido int64
@@ -230,21 +230,21 @@ func (r *repoFake) RegistrarRenovacao(ctx context.Context, e domain.Emprestimo) 
 	return e, nil
 }
 
-func (r *repoFake) BuscarLivro(ctx context.Context, id int64) (domain.Livro, error) {
+func (r *repoFake) BuscarLivro(ctx context.Context, id int64) (storage.LivroComDisponibilidade, error) {
 	if err := r.registrar(ctx, "BuscarLivro"); err != nil {
-		return domain.Livro{}, err
+		return storage.LivroComDisponibilidade{}, err
 	}
 	r.livroIDRecebido = id
 	if r.errBuscarLivro != nil {
-		return domain.Livro{}, r.errBuscarLivro
+		return storage.LivroComDisponibilidade{}, r.errBuscarLivro
 	}
 	if r.livroRet != nil {
 		return *r.livroRet, nil
 	}
-	return domain.Livro{ID: id, Titulo: "Dom Casmurro"}, nil
+	return storage.LivroComDisponibilidade{Livro: domain.Livro{ID: id, Titulo: "Dom Casmurro"}, Disponivel: true}, nil
 }
 
-func (r *repoFake) ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error) {
+func (r *repoFake) ListarLivros(ctx context.Context, apos int64, limite int) ([]storage.LivroComDisponibilidade, bool, error) {
 	if err := r.registrar(ctx, "ListarLivros"); err != nil {
 		return nil, false, err
 	}
