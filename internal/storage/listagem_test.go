@@ -44,6 +44,15 @@ func idsDe(ls []domain.Livro) []int64 {
 	return out
 }
 
+// idsLidos é idsDe para os itens de ListarLivros (DEL-017).
+func idsLidos(ls []LivroComDisponibilidade) []int64 {
+	out := make([]int64, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, l.Livro.ID)
+	}
+	return out
+}
+
 // TestListarLivros fixa a página: no máximo limite itens, em ordem de id, só
 // ids > apos, temMais verdadeiro só se houver item depois do último
 // entregue, e slice vazia (não nil) sem linhas.
@@ -84,17 +93,22 @@ func TestListarLivros(t *testing.T) {
 			if got == nil {
 				t.Error("ListarLivros devolveu nil, want slice (vazia se não houver linhas)")
 			}
-			if fmt.Sprint(idsDe(got)) != fmt.Sprint(idsOuVazio(tt.wantIDs)) {
-				t.Errorf("ids = %v, want %v", idsDe(got), idsOuVazio(tt.wantIDs))
+			if fmt.Sprint(idsLidos(got)) != fmt.Sprint(idsOuVazio(tt.wantIDs)) {
+				t.Errorf("ids = %v, want %v", idsLidos(got), idsOuVazio(tt.wantIDs))
 			}
 			if temMais != tt.wantTemMais {
 				t.Errorf("temMais = %v, want %v", temMais, tt.wantTemMais)
 			}
-			for _, l := range got {
+			for _, it := range got {
+				l := it.Livro
 				for _, w := range todos {
 					if w.ID == l.ID && w.Titulo != l.Titulo {
 						t.Errorf("livro %d titulo = %q, want %q", l.ID, l.Titulo, w.Titulo)
 					}
+				}
+				// Acervo sem empréstimo: todos disponíveis (DEL-017).
+				if !it.Disponivel {
+					t.Errorf("livro %d Disponivel = false, want true (sem empréstimo)", l.ID)
 				}
 			}
 		})
@@ -133,14 +147,14 @@ func TestListarLivrosPercorrerTudo(t *testing.T) {
 				if len(got) > limite {
 					t.Fatalf("%d itens, want no máximo %d", len(got), limite)
 				}
-				visitados = append(visitados, idsDe(got)...)
+				visitados = append(visitados, idsLidos(got)...)
 				if !temMais {
 					break
 				}
 				if len(got) == 0 {
 					t.Fatal("temMais com página vazia")
 				}
-				apos = got[len(got)-1].ID
+				apos = got[len(got)-1].Livro.ID
 			}
 			if fmt.Sprint(visitados) != want {
 				t.Errorf("visitados = %v, want %v", visitados, want)

@@ -104,37 +104,70 @@ func (r *Repositorio) InserirLivro(ctx context.Context, l domain.Livro) (domain.
 	return got, nil
 }
 
-// BuscarLivro lê o livro id; inexistente devolve ErrLivroNaoEncontrado.
-func (r *Repositorio) BuscarLivro(ctx context.Context, id int64) (domain.Livro, error) {
+// LivroComDisponibilidade é o tipo de leitura de BuscarLivro e ListarLivros
+// (D-23): o livro e se ele está disponível agora, isto é, sem empréstimo
+// aberto (vencido também conta como indisponível). A disponibilidade é
+// estado derivado do empréstimo (D-12), por isso fica fora de domain.Livro;
+// o campo nomeado, sem embedding, impede passar este tipo onde se espera
+// domain.Livro.
+type LivroComDisponibilidade struct {
+	Livro      domain.Livro
+	Disponivel bool
+}
+
+// Leitura de livro com disponibilidade (D-23). A subconsulta escalar com
+// LIMIT 1 na projeção vira uma sonda por livro no índice parcial
+// emprestimo_livro_aberto_uq; a forma com EXISTS é evitada porque o planner
+// a converte em SubPlan hasheado, que lê todos os empréstimos abertos.
+// devolucao IS NULL fica literal para o índice parcial casar no plano
+// genérico. O FROM externo é só livro, então o LIMIT conta livros.
+const (
+	sqlListarLivros = `SELECT l.id, l.titulo,
+       (SELECT 1 FROM emprestimo e
+         WHERE e.livro_id = l.id AND e.devolucao IS NULL
+         LIMIT 1) IS NULL AS disponivel
+  FROM livro l
+ WHERE l.id > $1
+ ORDER BY l.id
+ LIMIT $2`
+
+	sqlBuscarLivro = `SELECT l.id, l.titulo,
+       (SELECT 1 FROM emprestimo e
+         WHERE e.livro_id = l.id AND e.devolucao IS NULL
+         LIMIT 1) IS NULL AS disponivel
+  FROM livro l
+ WHERE l.id = $1`
+)
+
+// BuscarLivro lê o livro id com a disponibilidade; inexistente devolve
+// ErrLivroNaoEncontrado.
+func (r *Repositorio) BuscarLivro(ctx context.Context, id int64) (LivroComDisponibilidade, error) {
 	if id <= 0 {
-		return domain.Livro{}, ErrLivroNaoEncontrado
+		return LivroComDisponibilidade{}, ErrLivroNaoEncontrado
 	}
-	var got domain.Livro
-	err := r.db.QueryRow(ctx,
-		`SELECT id, titulo FROM livro WHERE id = $1`,
-		id).Scan(&got.ID, &got.Titulo)
+	var got LivroComDisponibilidade
+	err := r.db.QueryRow(ctx, sqlBuscarLivro, id).
+		Scan(&got.Livro.ID, &got.Livro.Titulo, &got.Disponivel)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return domain.Livro{}, ErrLivroNaoEncontrado
+		return LivroComDisponibilidade{}, ErrLivroNaoEncontrado
 	}
 	if err != nil {
-		return domain.Livro{}, traduzirErro(err)
+		return LivroComDisponibilidade{}, traduzirErro(err)
 	}
 	return got, nil
 }
 
 // ListarLivros lê até limite livros com id > apos, em ordem crescente de id
-// (paginação keyset pela PK). O bool informa se há livros depois do último
-// devolvido. Sem livros, devolve slice vazia (não nil). Recusa, antes de
-// qualquer SQL, apos < 0 e limite fora de 1..LimiteListagemLivros com
-// ErrListagemInvalida.
-func (r *Repositorio) ListarLivros(ctx context.Context, apos int64, limite int) ([]domain.Livro, bool, error) {
-	return listarPorID(ctx, r.db,
-		`SELECT id, titulo FROM livro WHERE id > $1 ORDER BY id LIMIT $2`,
-		apos, limite,
-		func(rows pgx.Rows) (domain.Livro, error) {
-			var l domain.Livro
-			if err := rows.Scan(&l.ID, &l.Titulo); err != nil {
-				return domain.Livro{}, traduzirErro(err)
+// (paginação keyset pela PK), cada um com a disponibilidade. O bool informa
+// se há livros depois do último devolvido. Sem livros, devolve slice vazia
+// (não nil). Recusa, antes de qualquer SQL, apos < 0 e limite fora de
+// 1..LimiteListagemLivros com ErrListagemInvalida.
+func (r *Repositorio) ListarLivros(ctx context.Context, apos int64, limite int) ([]LivroComDisponibilidade, bool, error) {
+	return listarPorID(ctx, r.db, sqlListarLivros, apos, limite,
+		func(rows pgx.Rows) (LivroComDisponibilidade, error) {
+			var l LivroComDisponibilidade
+			if err := rows.Scan(&l.Livro.ID, &l.Livro.Titulo, &l.Disponivel); err != nil {
+				return LivroComDisponibilidade{}, traduzirErro(err)
 			}
 			return l, nil
 		})

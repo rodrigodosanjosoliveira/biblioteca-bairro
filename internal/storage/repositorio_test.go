@@ -151,8 +151,8 @@ func TestLivroIdaEVolta(t *testing.T) {
 			if err != nil {
 				t.Fatalf("BuscarLivro erro inesperado: %v", err)
 			}
-			if lido != got {
-				t.Errorf("BuscarLivro = %+v, want %+v", lido, got)
+			if lido.Livro != got || !lido.Disponivel {
+				t.Errorf("BuscarLivro = %+v, want {%+v true}", lido, got)
 			}
 		})
 	}

@@ -142,7 +142,7 @@
                 }
               ]
             },
-            "description": "Página `{itens: [{id, titulo}], proximo}` em ordem de id; `proximo` é null na última página (o script grava ou apaga `cursor_livros`). Aceita só `limite` e `apos`. Erros: 400 parametro_invalido."
+            "description": "Página `{itens: [{id, titulo, disponivel}], proximo}` em ordem de id; `proximo` é null na última página (o script grava ou apaga `cursor_livros`). `disponivel` (bool, sempre presente) é false quando o livro tem empréstimo aberto, vencido ou não, e true caso contrário (D-23). Exemplo: `{\"itens\": [{\"id\": 1, \"titulo\": \"Livro Exemplo\", \"disponivel\": true}, {\"id\": 2, \"titulo\": \"Outro Livro\", \"disponivel\": false}], \"proximo\": null}`. Aceita só `limite` e `apos` (não há filtro por `disponivel`). Erros: 400 parametro_invalido."
           },
           "response": []
         },
@@ -156,7 +156,7 @@
               "host": ["{{base_url}}"],
               "path": ["livros", "{{livro_id}}"]
             },
-            "description": "200 `{id, titulo}`. Erros: 400 id_invalido; 404 livro_nao_encontrado."
+            "description": "200 `{id, titulo, disponivel}`; `disponivel` (bool, sempre presente) é false quando o livro tem empréstimo aberto, vencido ou não, e true caso contrário (D-23). Exemplo: `{\"id\": 1, \"titulo\": \"Livro Exemplo\", \"disponivel\": false}`. Erros: 400 id_invalido; 404 livro_nao_encontrado."
           },
           "response": []
         }
